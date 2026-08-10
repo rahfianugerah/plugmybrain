@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from brain import config
+from brain import config, ingest
 
 
 def test_namespace_is_the_lowercased_directory_name():
@@ -51,5 +51,22 @@ def test_collect_documents_splits_included_from_skipped(tmp_path):
     assert {p.name for p in skipped} == {".env", "leak.md"}
 
 
-def test_dimension_guard_matches_the_pgvector_hnsw_ceiling():
+def test_dimension_guard_matches_the_pgvector_index_ceiling():
     assert config.MAX_INDEXABLE_DIMENSIONS == 2000
+
+
+# pgvector sizes IVFFlat at lists = rows / 1000, so a small table would get a one-list index,
+# which is a sequential scan carrying index overhead. Exact search has to win below the
+# threshold or the whole choice is theatre.
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [(0, "exact"), (500, "exact"), (9_999, "exact"), (10_000, "ivfflat"), (250_000, "ivfflat")],
+)
+def test_auto_picks_exact_until_an_index_would_actually_help(rows, expected):
+    assert ingest.choose_index(rows, kind="auto") == expected
+
+
+@pytest.mark.parametrize("kind", ["exact", "ivfflat", "hnsw"])
+def test_an_explicit_index_choice_is_never_overridden(kind):
+    assert ingest.choose_index(50, kind=kind) == kind
+    assert ingest.choose_index(5_000_000, kind=kind) == kind

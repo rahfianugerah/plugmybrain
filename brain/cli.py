@@ -77,10 +77,12 @@ def _print_ingest(report) -> None:
         print(f"          ... and {len(report.skipped) - 10} more")
     if report.estimate is not None:
         print(f"estimate: {report.estimate}")
-    if report.indexes_created:
-        print(f"indexed:  {', '.join(report.indexes_created)}")
-    elif report.estimate is None:
-        print("indexed:  no new vector column needed an HNSW index")
+    for created in report.indexes_created:
+        print(f"indexed:  {created}")
+    for small in report.indexes_skipped:
+        print(f"exact:    {small}")
+    for due in report.indexes_rebuild_due:
+        print(f"REBUILD:  {due}. Drop the index and re-run to resize it")
     for refused in report.indexes_refused:
         print(f"REFUSED:  {refused} did not match the identifier allowlist and was left unindexed")
 

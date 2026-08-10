@@ -1,7 +1,12 @@
 # The image's dependency tree. Mirrors the pip block in environment.yml, which is what the
 # `env` conda environment installs. Graphify is absent on purpose: mapping is a local command,
 # never a deployed one.
+#
+# cognee-mcp versions independently of cognee core; 0.5.5 is the current release and it
+# requires cognee>=1.1.0,<2.0.0, so the 1.4.2 pin below satisfies it. It also drags in the
+# docs and neo4j extras, which is weight this VM does not use but cannot decline.
 cognee[postgres]==1.4.2
+cognee-mcp==0.5.5
 asyncpg
 python-dotenv
 pyyaml

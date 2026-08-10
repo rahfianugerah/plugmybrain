@@ -51,6 +51,14 @@ docker compose up -d
 docker compose ps          # wait for healthy
 ```
 
+**Step 3 has to come first.** `compose.yaml` declares `.env` as a required env file, so
+`docker compose up` without it fails with `env file ... not found`. That is deliberate: made
+optional, `cognee-mcp` would start on cognee's embedded SQLite and LanceDB defaults and quietly
+serve the wrong database.
+
+On the laptop `compose.override.yaml` is picked up automatically and brings up Postgres alone,
+because the agents talk to the VM's MCP server rather than a second local one.
+
 The `vector` extension is created on first start by `scripts/init-pgvector.sql`. It runs only
 on an empty data directory, so if you ever change it, `docker compose down -v` first.
 
@@ -63,12 +71,13 @@ brain sync --dry-run
 **6. Ingest the curated rules and memory.**
 
 ```bash
-brain sync
+brain sync                                     # laptop, against whatever DB_HOST points at
+docker compose run --rm cognee-ingest          # on the VM, one-shot
 ```
 
-Read the output. It reports documents ingested, files skipped by the exclusion list, and the
-HNSW indexes it created. A skip is printed rather than swallowed, because a silent skip reads
-as "covered everything" when it did not.
+Read the output. It reports documents ingested, files skipped by the exclusion list, and which
+vector index each table got with the row count that decided it. A skip is printed rather than
+swallowed, because a silent skip reads as "covered everything" when it did not.
 
 **7. Validate.**
 
@@ -85,6 +94,114 @@ right source file is cited. It also reports p50 and p95 on the warm path.
 brain serve                      # http://127.0.0.1:8080/health
 brain export --project curated   # knowledge graph into the vault, as wikilink notes
 ```
+
+## Deployment
+
+One `docker compose` stack, identical on the laptop and on a single always-on Compute Engine
+VM. No Cloud Run, no Cloud SQL, no Secret Manager. See `## Deviations From the Standards`.
+
+| Runs on the VM | Runs on the laptop |
+| :- | :- |
+| `postgres`, always on, loopback only | `brain map`, entirely local, no network at all |
+| `cognee-mcp`, always on, loopback only | The Obsidian vault, which you edit |
+| `cognee-ingest`, one-shot, behind a compose profile | Claude Code and Codex, via the tunnel |
+| The nightly `pg_dump` | `brain export` and `brain sync`, via the tunnel |
+
+If the tunnel is down, `brain map` still answers code-structure questions. Only the document
+brain becomes unreachable. That is the intended degradation, not an outage.
+
+### 1. Create the VM
+
+Nothing here is run for you. Substitute your own project and confirm the cost first.
+
+```bash
+export PROJECT=[PROJECT]  ZONE=asia-southeast1-a  VM=brain
+gcloud compute instances create $VM --project $PROJECT --zone $ZONE \
+  --machine-type e2-small \
+  --image-family debian-12 --image-project debian-cloud \
+  --boot-disk-size 30GB --boot-disk-type pd-balanced
+```
+
+30GB is not generosity. Docker images plus Postgres data plus WAL plus logs on a 10GB disk is
+how a data directory gets corrupted, and disk is the cheapest part of this.
+
+Lock SSH to Identity-Aware Proxy so the tunnel is the only door, and open nothing else:
+
+```bash
+gcloud compute firewall-rules create brain-iap-ssh --project $PROJECT \
+  --allow tcp:22 --source-ranges 35.235.240.0/20
+```
+
+There is deliberately no rule for 5432 or 8000. Both bind to the VM's loopback and are reached
+only through the tunnel.
+
+### 2. Provision the host
+
+```bash
+gcloud compute ssh $VM --tunnel-through-iap --zone $ZONE
+sudo bash scripts/provision-vm.sh     # swap, disk check, docker at boot, Asia/Jakarta
+```
+
+### 3. Configuration, and bring it up
+
+```bash
+sudo install -m 600 /dev/null /opt/brain/.env
+sudo vi /opt/brain/.env               # from .env.example; DB_HOST=postgres inside compose
+sudo docker compose up -d
+```
+
+`.env` is `0600` and root-owned, so the stack runs as root from `/opt/brain`.
+
+### 4. The tunnel, from the laptop
+
+```powershell
+$env:BRAIN_VM="brain"; $env:BRAIN_ZONE="asia-southeast1-a"; $env:BRAIN_PROJECT="[PROJECT]"
+.\scripts\tunnel.ps1
+```
+
+One session carries both ports and reconnects if it drops: `8000` for the MCP server and
+`15432` for Postgres. Set `DB_PORT=15432` in the laptop's `.env`. The odd port is deliberate:
+a dev Postgres already holding 5432 would otherwise make the forward fail in a way that reads
+as a database problem.
+
+### 5. Backups
+
+```bash
+gcloud storage buckets create gs://[BUCKET] --project $PROJECT --location asia-southeast1
+gcloud storage buckets add-iam-policy-binding gs://[BUCKET] \
+  --member "serviceAccount:$(gcloud compute instances describe $VM --zone $ZONE \
+    --format 'value(serviceAccounts[0].email)')" --role roles/storage.objectAdmin
+```
+
+Set `BACKUP_BUCKET` in the VM's `.env`, then schedule it:
+
+```bash
+sudo crontab -e
+# 0 3 * * * /opt/brain/scripts/backup.sh >> /var/log/brain-backup.log 2>&1
+```
+
+The timezone is set by `provision-vm.sh`. Without it cron runs UTC and 03:00 becomes 10:00
+local. The script exits non-zero on an empty dump or a nearly full disk, because a backup
+script that fails quietly is worse than none: it is trusted.
+
+A disk snapshot schedule is the zero-maintenance complement and covers a different failure:
+
+```bash
+gcloud compute resource-policies create snapshot-schedule brain-nightly \
+  --project $PROJECT --region asia-southeast1 \
+  --max-retention-days 14 --daily-schedule --start-time 19:00
+```
+
+### 6. Restore
+
+```bash
+gcloud storage cp gs://[BUCKET]/brain-YYYY-MM-DD.sql.gz .
+gunzip -c brain-YYYY-MM-DD.sql.gz | docker compose exec -T postgres psql -U brain -d brain
+```
+
+**Restore once into a scratch database before you trust it.** An untested backup is not a
+backup. And the real durable store is the markdown vault: worst case, the whole database is
+rebuildable by re-running `brain sync`.
 
 ## Usage
 
@@ -107,10 +224,9 @@ Every variable the project reads. Names only; see [[env.rules.md]].
 
 | Variable | Required | Description |
 | :- | :- | :- |
-| `BRAIN_PROFILE` | No | `local` or `cloud`. Selects where the database lives. Default `local` |
 | `BRAIN_VAULT` | No | Path to the Obsidian vault. Defaults to the sibling `docs` checkout |
 | `BRAIN_GRAPH_DIR` | No | Where Graphify output lands. Defaults to `graph/` |
-| `DB_HOST` `DB_PORT` `DB_NAME` `DB_USERNAME` | Yes | PostgreSQL connection |
+| `DB_HOST` `DB_PORT` `DB_NAME` `DB_USERNAME` | Yes | PostgreSQL connection. `postgres:5432` inside compose, `127.0.0.1:15432` from the laptop over the tunnel |
 | `DB_PASSWORD` | Yes | Database password |
 | `EMBEDDING_PROVIDER` `EMBEDDING_MODEL` | Yes | `voyage` and `voyage/voyage-3.5` |
 | `EMBEDDING_DIMENSIONS` | Yes | `1024`. Above 2000 the process refuses to start |
@@ -119,7 +235,10 @@ Every variable the project reads. Names only; see [[env.rules.md]].
 | `LLM_API_KEY` | Yes | Unless `LLM_PROVIDER=mcp-sampling`, which only works inside an MCP session |
 | `POOL_ARGS` `VECTOR_POOL_ARGS` | No | Connection pool sizing |
 | `CHUNK_SIZE` `CHUNK_OVERLAP` | No | Ingestion chunking |
-| `CLOUDSQL_INSTANCE` | No | `cloud` profile only. `PROJECT:REGION:INSTANCE` |
+| `BRAIN_INDEX` | No | `auto`, `exact`, `ivfflat` or `hnsw`. Default `auto` |
+| `BRAIN_INDEX_THRESHOLD` | No | Rows below which exact search beats an index. Default 10000 |
+| `BACKUP_BUCKET` `BACKUP_KEEP_DAYS` | No | VM only. Nightly `pg_dump` target and retention |
+| `BRAIN_VM` `BRAIN_ZONE` `BRAIN_PROJECT` | No | Laptop only. Used by `scripts/tunnel.ps1` |
 
 ## Data
 
@@ -136,14 +255,19 @@ Nothing here is committed.
 
 ```text
 brain/
-  config.py      # paths, profile, the exclusion list, the dimension guard
-  ingest.py      # add, cognify, then the HNSW index cognee does not create
+  config.py      # paths, the exclusion list, the dimension and index guards
+  ingest.py      # add, cognify, then the vector index cognee does not create
   retrieve.py    # dataset-scoped search
   export.py      # knowledge graph to vault wikilink notes
   eval.py        # the question set, scored, with p50 and p95
   api.py         # the HTTP surface
   cli.py         # the one entry point
-scripts/         # database init, MCP launcher
+compose.yaml     # postgres, cognee-mcp, and cognee-ingest behind a profile
+scripts/
+  provision-vm.sh   # swap, disk check, docker at boot, timezone
+  tunnel.ps1        # the laptop's SSH forwards to the VM
+  backup.sh         # nightly pg_dump to GCS
+  init-pgvector.sql # CREATE EXTENSION, on first start only
 tests/
 ```
 
@@ -176,9 +300,21 @@ pasted into an ordinary `.md` still gets through.
   unstable, `GRAPH_DATABASE_PROVIDER=kuzu` works locally with no other change.
 - **The embedding model is locked to the corpus.** Swapping the chat model is free. Swapping
   `EMBEDDING_MODEL` or `EMBEDDING_DIMENSIONS` means re-embedding everything.
-- **1024 dimensions is a ceiling, not a preference.** pgvector will not build an HNSW index on
-  a `vector` column wider than 2000. It does not fail loudly; it just leaves every search doing
-  a sequential scan. `config.py` refuses to start above that.
+- **1024 dimensions is a ceiling, not a preference.** pgvector will not index a `vector` column
+  wider than 2000, by HNSW or IVFFlat. It does not fail loudly; it just leaves every search
+  doing a sequential scan. `config.py` refuses to start above that.
+- **The first corpus gets no vector index, on purpose.** pgvector sizes IVFFlat at
+  `lists = rows / 1000`, so a few hundred chunks would produce a one-list index: a sequential
+  scan carrying index overhead. Exact search over the same rows is faster and has perfect
+  recall. `brain sync` prints which index each table got and the row count that decided it.
+- **HNSW is opt-in and wants roughly 4 GiB.** On a 2 GiB VM the index build is the thing that
+  gets OOM-killed. `BRAIN_INDEX=hnsw` after resizing, not before.
+- **Ingestion and serving must not run at once on 2 GiB.** `cognee-ingest` sits behind a
+  compose profile so `docker compose up -d` cannot start it, and both cognee containers carry
+  a `mem_limit` so Docker kills them before the kernel picks Postgres by size.
+- **One VM is one point of failure.** Accepted for a personal brain. The nightly `pg_dump` is
+  the mitigation, and the markdown vault is the real durable store: the database is rebuildable
+  from files by re-running `brain sync`.
 - **There is no single no-model mode returning chunks and graph context together.** `chunks`
   returns sourced context with no completion step, `graph` spends an extra call. A combined
   retrieval mode would be a second query, and it is not built until the eval asks for it.
@@ -191,18 +327,22 @@ pasted into an ordinary `.md` still gets through.
 
 Written down because [[deploy.rules.md]] and [[secret.rules.md]] require a deviation to say why.
 
-1. **`--max-instances 2`**, where [[deploy.rules.md]] fixes 5. Tighter than the rule's ceiling,
-   for cost. The agent path is a local process, so the service absorbs no agent traffic.
-2. **No Alembic for the HNSW index**, where [[database.rules.md]] routes migrations through
+1. **Not Cloud Run.** [[deploy.rules.md]] requires every deployed project to ship to Cloud Run
+   via Cloud Build and Artifact Registry. The brain runs as one Docker stack on a flat-cost
+   Compute Engine VM instead. That file now carries a named exception for this one project;
+   the reasoning is in `docs/memory/decision/`. In short: an always-on Postgres has no idle
+   state to scale down to, so the managed equivalent bills a monthly floor for something a
+   single small VM already covers. The exception does not generalise.
+2. **No Alembic for the vector index**, where [[database.rules.md]] routes migrations through
    Alembic. Cognee owns and mutates its own schema, and a second migration tool fighting it
-   breaks on every cognee upgrade. `ensure_hnsw()` is idempotent DDL run at the end of every
-   ingest instead, and it has to run every time because cognee creates a new table per
+   breaks on every cognee upgrade. `ensure_vector_index()` is idempotent DDL run at the end of
+   every ingest instead, and it has to run every time because cognee creates a new table per
    collection.
-3. **No Secret Manager.** Values live in a gitignored `.env` locally and a gitignored
-   `env-vars.yaml` on cloud. [[secret.rules.md]] ranks Secret Manager first and a gitignored
+3. **No Secret Manager.** Values live in a gitignored `.env` on the laptop and a `0600`
+   root-owned `.env` on the VM. [[secret.rules.md]] ranks Secret Manager first and a gitignored
    `.env` second, so this takes the second-ranked option. The cost, stated so it is a decision
    rather than an accident: no rotation history, no per-secret IAM, and a value readable by
-   anything that can read the file or describe the revision.
+   anything that can read the file.
 4. **The conda environment is named `env`**, where [[codes.rules.md]] says to name it after the
    project. Chosen deliberately.
 

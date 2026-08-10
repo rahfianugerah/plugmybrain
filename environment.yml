@@ -13,7 +13,9 @@ dependencies:
   - ruff
   - pytest
   - pip:
+      # cognee-mcp versions independently of cognee core and requires cognee>=1.1.0,<2.0.0.
       - cognee[postgres]==1.4.2
+      - cognee-mcp==0.5.5
       - graphifyy==0.9.38
       - asyncpg
       - python-dotenv

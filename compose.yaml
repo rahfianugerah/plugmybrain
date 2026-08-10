@@ -1,13 +1,30 @@
-# The whole `local` profile database: relational, vector and graph in one PostgreSQL 18.
+# The whole system: one stack, identical on the laptop and on the VM.
+# Tuned for e2-small (2 GiB). Nothing binds anything but loopback; the only way in is the tunnel.
 services:
-  db:
+  postgres:
     image: pgvector/pgvector:0.8.6-pg18
     container_name: brain-pg
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${DB_NAME:-brain}
       POSTGRES_USER: ${DB_USERNAME:-brain}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    # Tuned for 2 GiB with a swapfile behind it. Passed as flags so there is no config file to
+    # mount, drift, or forget. Raise these together with the VM, not on their own.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - max_connections=20
     ports:
+      # Loopback only. Reached from the laptop through the SSH tunnel, never over the network.
       - "127.0.0.1:5432:5432"
     volumes:
       - brain-pgdata:/var/lib/postgresql/data
@@ -19,6 +36,46 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  cognee-mcp:
+    build: .
+    container_name: brain-mcp
+    restart: unless-stopped
+    command: ["cognee-mcp", "--transport", "http"]
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      HTTP_PORT: "8000"
+      # 0.0.0.0 inside the container is correct: the publish below is what scopes it, and it
+      # scopes it to the VM's loopback. Nothing reaches this except through the tunnel.
+      BIND_ADDRESS: "0.0.0.0"
+    # Docker kills this before the kernel picks a victim by size, which would be Postgres.
+    mem_limit: 900m
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  cognee-ingest:
+    build: .
+    # Behind a profile, so `docker compose up -d` is structurally incapable of starting it
+    # alongside serving. On 2 GiB that is the difference between slow and OOM-killed, and a
+    # file that enforces it beats remembering to.
+    profiles: ["ingest"]
+    command: ["brain", "sync"]
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+    mem_limit: 1200m
+    volumes:
+      # The vault, read-only: ingestion reads the curated rules and must never write to them.
+      - ${BRAIN_VAULT:-../docs}:/vault:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   brain-pgdata:

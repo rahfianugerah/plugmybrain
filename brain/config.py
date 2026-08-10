@@ -1,14 +1,12 @@
-# Paths, profile and cognee settings. One module, both profiles; BRAIN_PROFILE is the only switch.
+# Paths and cognee settings. One Docker stack runs everywhere, so DB_HOST is the only thing
+# that differs between the laptop and the VM. There is no profile switch.
 from __future__ import annotations
 
 import fnmatch
-import json
 import os
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
-PROFILE = os.getenv("BRAIN_PROFILE", "local")
 
 # The vault is a sibling checkout by default, because that is how the two repos sit on disk.
 VAULT = Path(os.getenv("BRAIN_VAULT", REPO_ROOT.parent / "docs")).resolve()
@@ -23,9 +21,18 @@ VAULT_GENERATED = VAULT / "graph"
 CURATED_DATASET = "curated"
 CURATED_PATHS = (VAULT / "rules", VAULT / "memory")
 
-# pgvector refuses to build an HNSW index on a `vector` column wider than this. Exceeding it
-# does not fail loudly, it just leaves every search doing a sequential scan.
+# pgvector refuses to build an approximate index on a `vector` column wider than this, for
+# either HNSW or IVFFlat. Exceeding it does not fail loudly, it just leaves every search doing
+# a sequential scan.
 MAX_INDEXABLE_DIMENSIONS = 2000
+
+# exact, ivfflat, hnsw, or auto. auto picks exact below the threshold and IVFFlat above it.
+# HNSW is opt-in and wants roughly 4 GiB; on a 2 GiB VM its build is the thing that OOMs.
+INDEX_KIND = os.getenv("BRAIN_INDEX", "auto")
+
+# Below this row count an approximate index is worse than no index: pgvector sizes IVFFlat at
+# lists = rows / 1000, so a small table gets one list, which is a sequential scan plus overhead.
+FLAT_THRESHOLD = int(os.getenv("BRAIN_INDEX_THRESHOLD", "10000"))
 
 # Documents only. Code structure is Graphify's job, and ingesting source would pay a model to
 # rediscover what `brain map` already extracted for nothing.
@@ -161,18 +168,15 @@ def configure() -> None:
     if dimensions > MAX_INDEXABLE_DIMENSIONS:
         raise SystemExit(
             f"EMBEDDING_DIMENSIONS={dimensions} exceeds {MAX_INDEXABLE_DIMENSIONS}, the widest "
-            "vector pgvector will build an HNSW index on. Every search would fall back to a "
-            "sequential scan. Use 1024."
+            "vector pgvector will index at all. Every search would fall back to a sequential "
+            "scan. Use 1024."
         )
+
+    if INDEX_KIND not in ("auto", "exact", "ivfflat", "hnsw"):
+        raise SystemExit(f"BRAIN_INDEX={INDEX_KIND!r}. Use auto, exact, ivfflat or hnsw.")
 
     # The vector store is the same Postgres as the relational store: one database, one backup.
     for key in ("HOST", "PORT", "NAME", "USERNAME", "PASSWORD"):
         value = os.getenv(f"DB_{key}")
         if value:
             os.environ.setdefault(f"VECTOR_DB_{key}", value)
-
-    # Cloud Run reaches Cloud SQL over a unix socket. Cognee builds its URL from DB_HOST and
-    # DB_PORT, which cannot express a socket, so it travels as a connect arg instead.
-    if PROFILE == "cloud" and os.getenv("K_SERVICE"):
-        instance = os.environ["CLOUDSQL_INSTANCE"]
-        os.environ["DATABASE_CONNECT_ARGS"] = json.dumps({"host": f"/cloudsql/{instance}"})
