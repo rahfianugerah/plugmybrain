@@ -13,7 +13,11 @@ RUN useradd -m app
 COPY --from=build /install /usr/local
 COPY --chown=app:app . /app
 WORKDIR /app
-RUN pip install --no-cache-dir --no-deps -e .
+RUN pip install --no-cache-dir --no-deps -e . \
+ # An empty named volume inherits ownership from the image's directory at the mount point.
+ # Without this, /data arrives root-owned, and a container that correctly runs as non-root
+ # cannot create cognee's state directory inside it.
+ && mkdir -p /data && chown app:app /data
 USER app
 # Overridden per service in compose.yaml. The default is the serving path, because a container
 # started with no command should serve rather than mutate anything.

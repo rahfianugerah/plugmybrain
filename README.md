@@ -267,11 +267,15 @@ write it.
 
 ## Agent Wiring
 
-Both Claude Code and Codex reach the brain as a remote MCP server over the SSH tunnel. Neither
-runs a cognee process locally, and neither pays a cold start.
+Both Claude Code and Codex reach the brain as a remote MCP server at
+`http://127.0.0.1:8000/mcp`. **The same URL works in both setups**, which is the point:
 
-Start the tunnel first, from `## Deployment` step 4. It forwards `8000` to the VM's loopback,
-so the URL below is stable for as long as the tunnel is up.
+- **Stack running locally.** `docker compose up -d` publishes the MCP server on loopback. No
+  tunnel, no VM, nothing else to start.
+- **Stack running on the VM.** Start the tunnel from `## Deployment` step 4; it forwards `8000`
+  to the VM's loopback, so the URL the agents already have keeps working.
+
+Neither agent runs a cognee process, and neither pays a cold start.
 
 ```powershell
 claude mcp add --transport http cognee http://127.0.0.1:8000/mcp --scope user

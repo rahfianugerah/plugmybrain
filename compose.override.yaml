@@ -1,5 +1,8 @@
-# Laptop dev. Compose reads this automatically, so `docker compose up -d` here brings up
-# Postgres alone and the CLI runs natively against it. The VM never has this file.
+# Laptop dev. Compose reads this automatically; the VM never has this file.
+#
+# The full stack runs here, MCP server included, so `docker compose up -d` gives a working
+# brain with no VM and no tunnel. The tunnel only becomes relevant once the same stack is
+# running somewhere else and this machine needs to reach it.
 services:
   postgres:
     # !override, not a plain list: compose merges `ports` by appending, so without it this
@@ -9,9 +12,3 @@ services:
       # matches DB_PORT in .env.example, which is 15432 for the laptop either way: local
       # container now, forwarded from the VM later.
       - "127.0.0.1:15432:5432"
-
-  cognee-mcp:
-    # On the laptop the agents talk to the VM, not to a second MCP server. Zero replicas keeps
-    # the service defined but not running, so the compose file stays identical on both hosts.
-    deploy:
-      replicas: 0
