@@ -88,12 +88,29 @@ pmb eval
 Ten questions against the vault's own rules, two of them multi-hop, scored on whether the
 right source file is cited. It also reports p50 and p95 on the warm path.
 
-**8. Optional: the HTTP API and the graph export.**
+**8. Look at it.** Three views, none of which needs a server running.
 
 ```bash
-pmb serve                      # http://127.0.0.1:8080/health
-pmb export --project curated   # knowledge graph into the vault, as wikilink notes
+pmb visualize --project curated   # the knowledge graph, one self-contained HTML file
+pmb export    --project curated   # the same graph as vault notes, for the Obsidian graph view
+pmb serve                         # optional HTTP API on http://127.0.0.1:8080/health
 ```
+
+See `## Visualisation` below for what each one is good for.
+
+**9. Wire the agents.** See `## Agent Wiring`.
+
+### The whole thing, once it is set up
+
+Day to day this is the entire loop:
+
+```bash
+docker compose up -d              # the brain comes up and stays up
+pmb sync                          # after editing anything in the vault's memory/ or rules/
+pmb map /path/to/a/project        # after a codebase changes
+```
+
+Everything else is a query, and the agents make those themselves over MCP.
 
 ## Deployment
 
@@ -203,6 +220,59 @@ gunzip -c plugmybrain-YYYY-MM-DD.sql.gz | docker compose exec -T postgres psql -
 backup. And the real durable store is the markdown vault: worst case, the whole database is
 rebuildable by re-running `pmb sync`.
 
+## Visualisation
+
+Three views, because they answer different questions. All three are files you open, not
+services you run.
+
+| View | Command | Shows | Cost |
+| :- | :- | :- | :- |
+| Code map | `pmb map <path>` | Classes, functions, imports and the call graph, as an interactive `graph.html` | Zero API tokens, entirely local |
+| Knowledge graph | `pmb visualize --project <name>` | The Cognee graph as one self-contained HTML file | One query, no model call |
+| Vault graph | `pmb export --project <name>` | The same graph as `[[wikilink]]` notes, rendered by Obsidian's own graph view | One query, no model call |
+
+```bash
+pmb map C:\path\to\project                        # then open graph/<project>/graphify-out/graph.html
+pmb visualize --project curated                   # then open docs/graph/kg/curated/graph.html
+pmb export    --project curated                   # then open the vault in Obsidian
+```
+
+The vault view is the one to reach for when you want the knowledge graph *next to* the notes
+that produced it, since Obsidian renders generated notes and human ones in one graph. The
+standalone HTML is the one to reach for when you just want to look.
+
+Everything under `docs/graph/` is gitignored and regenerated. Never hand-edit it.
+
+## Agent Wiring
+
+Both Claude Code and Codex reach the brain as a remote MCP server over the SSH tunnel. Neither
+runs a cognee process locally, and neither pays a cold start.
+
+Start the tunnel first, from `## Deployment` step 4. It forwards `8000` to the VM's loopback,
+so the URL below is stable for as long as the tunnel is up.
+
+```powershell
+claude mcp add --transport http cognee http://127.0.0.1:8000/mcp --scope user
+```
+
+For Codex, add this to `~/.codex/config.toml` by hand. `codex mcp add` only registers stdio
+servers, so the CLI cannot do this one:
+
+```toml
+[mcp_servers.cognee]
+url = "http://127.0.0.1:8000/mcp"
+startup_timeout_sec = 60
+```
+
+**SSH is the authentication boundary.** The MCP server has no auth of its own and binds only to
+the VM's loopback, so the tunnel is the only way to reach it. Plain HTTP is correct rather than
+lazy: the traffic never leaves loopback on either end and SSH encrypts the hop between them.
+
+`CLAUDE.md` and `AGENTS.md` in this repository are byte-identical and carry the same three
+pointers: read `graph.json` for code structure, read the vault's `memory/` for rules, and pass
+the dataset on every Cognee query. Other projects copy [[agent.template.md]] from the vault
+rather than reinventing them.
+
 ## Usage
 
 ```bash
@@ -210,7 +280,8 @@ pmb map    /path/to/project          # code structure, zero API tokens
 pmb ingest /path/to/project          # that project's documents, into its own dataset
 pmb search "how is auth handled" --project project
 pmb sync                             # re-ingest the curated rules and memory
-pmb export --project project         # knowledge graph as vault notes
+pmb export    --project project      # knowledge graph as vault notes
+pmb visualize --project project      # knowledge graph as one HTML file
 pmb eval                             # score and latency
 pmb serve                            # the HTTP API
 ```

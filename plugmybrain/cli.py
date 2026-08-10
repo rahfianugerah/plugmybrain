@@ -116,6 +116,10 @@ def main(argv: list[str] | None = None) -> int:
     export_cmd.add_argument("--project", required=True, help="the dataset to export")
     export_cmd.add_argument("--limit", type=int, default=500, help="most-connected nodes to write")
 
+    viz_cmd = sub.add_parser("visualize", help="render the knowledge graph as one HTML file")
+    viz_cmd.add_argument("--project", required=True, help="the dataset to render")
+    viz_cmd.add_argument("--max-nodes", type=int, default=500)
+
     eval_cmd = sub.add_parser("eval", help="score the question set and time the warm path")
     eval_cmd.add_argument("--project", default=config.CURATED_DATASET)
 
@@ -166,6 +170,13 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"dropped {report.dropped} less-connected node(s). Raise --limit to include them."
             )
+        return 0
+
+    if args.command == "visualize":
+        from plugmybrain import export as export_module
+
+        path = asyncio.run(export_module.visualize(args.project, max_nodes=args.max_nodes))
+        print(f"open: {path}")
         return 0
 
     if args.command == "eval":

@@ -101,3 +101,23 @@ async def export(dataset: str, limit: int = DEFAULT_LIMIT) -> ExportReport:
     return ExportReport(
         dataset=dataset, written=len(chosen), total=len(labels), directory=directory
     )
+
+
+async def visualize(dataset: str, max_nodes: int = 500) -> Path:
+    """Write the knowledge graph as one self-contained HTML file and return its path.
+
+    Cognee renders it with no server and no external asset, so opening the file is the whole
+    viewing story. It lands in the generated area, so it is gitignored like everything else a
+    rebuild produces.
+    """
+    config.configure()
+    import cognee
+
+    destination = config.generated_path("kg", dataset, "graph.html")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    await cognee.visualize_graph(
+        destination_file_path=str(destination), dataset=dataset, max_nodes=max_nodes
+    )
+    if not destination.is_file():
+        raise SystemExit(f"cognee wrote no visualisation to {destination}")
+    return destination
