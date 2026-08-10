@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException, Query
 
-from brain import retrieve
+from plugmybrain import retrieve
 
-app = FastAPI(title="brain", description="Retrieval over the Cognee knowledge graph.")
+app = FastAPI(title="plugmybrain", description="Retrieval over the Cognee knowledge graph.")
 
 
 @app.get("/health")

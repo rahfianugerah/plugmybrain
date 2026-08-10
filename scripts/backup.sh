@@ -12,7 +12,7 @@ set -a; . ./.env; set +a
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-14}"
 MIN_FREE_MB="${BACKUP_MIN_FREE_MB:-2048}"
 STAMP="$(date +%Y-%m-%d)"
-DUMP="/var/backups/brain/${DB_NAME}-${STAMP}.sql.gz"
+DUMP="/var/backups/plugmybrain/${DB_NAME}-${STAMP}.sql.gz"
 
 free_mb=$(df -BM --output=avail /var/backups | tail -1 | tr -dc '0-9')
 if [ "$free_mb" -lt "$MIN_FREE_MB" ]; then
@@ -31,6 +31,6 @@ if [ ! -s "$DUMP" ] || [ "$(stat -c%s "$DUMP")" -lt 1024 ]; then
 fi
 
 gcloud storage cp "$DUMP" "gs://${BACKUP_BUCKET}/$(basename "$DUMP")"
-find /var/backups/brain -name '*.sql.gz' -mtime "+${KEEP_DAYS}" -delete
+find /var/backups/plugmybrain -name '*.sql.gz' -mtime "+${KEEP_DAYS}" -delete
 
 echo "backed up $(basename "$DUMP") ($(du -h "$DUMP" | cut -f1)) to gs://${BACKUP_BUCKET}/"

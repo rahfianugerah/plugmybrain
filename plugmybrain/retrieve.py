@@ -1,7 +1,7 @@
 # Retrieval. Chunks by default, so the agent path never pays for a second model call.
 from __future__ import annotations
 
-from brain import config
+from plugmybrain import config
 
 MODES = ("chunks", "graph")
 

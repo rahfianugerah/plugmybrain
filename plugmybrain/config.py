@@ -9,10 +9,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # The vault is a sibling checkout by default, because that is how the two repos sit on disk.
-VAULT = Path(os.getenv("BRAIN_VAULT", REPO_ROOT.parent / "docs")).resolve()
+VAULT = Path(os.getenv("PMB_VAULT", REPO_ROOT.parent / "docs")).resolve()
 
 # Graphify output lands here, never inside the folder that was mapped.
-GRAPH_DIR = Path(os.getenv("BRAIN_GRAPH_DIR", REPO_ROOT / "graph")).resolve()
+GRAPH_DIR = Path(os.getenv("PMB_GRAPH_DIR", REPO_ROOT / "graph")).resolve()
 
 # The only part of the vault this project may write to. Everything above it is human-authored.
 VAULT_GENERATED = VAULT / "graph"
@@ -28,14 +28,14 @@ MAX_INDEXABLE_DIMENSIONS = 2000
 
 # exact, ivfflat, hnsw, or auto. auto picks exact below the threshold and IVFFlat above it.
 # HNSW is opt-in and wants roughly 4 GiB; on a 2 GiB VM its build is the thing that OOMs.
-INDEX_KIND = os.getenv("BRAIN_INDEX", "auto")
+INDEX_KIND = os.getenv("PMB_INDEX", "auto")
 
 # Below this row count an approximate index is worse than no index: pgvector sizes IVFFlat at
 # lists = rows / 1000, so a small table gets one list, which is a sequential scan plus overhead.
-FLAT_THRESHOLD = int(os.getenv("BRAIN_INDEX_THRESHOLD", "10000"))
+FLAT_THRESHOLD = int(os.getenv("PMB_INDEX_THRESHOLD", "10000"))
 
 # Documents only. Code structure is Graphify's job, and ingesting source would pay a model to
-# rediscover what `brain map` already extracted for nothing.
+# rediscover what `pmb map` already extracted for nothing.
 DOCUMENT_SUFFIXES = frozenset({".md", ".txt", ".rst", ".pdf", ".docx", ".csv"})
 
 # Never read, whatever folder the tool is pointed at. Ingestion uploads file contents, so this
@@ -173,7 +173,7 @@ def configure() -> None:
         )
 
     if INDEX_KIND not in ("auto", "exact", "ivfflat", "hnsw"):
-        raise SystemExit(f"BRAIN_INDEX={INDEX_KIND!r}. Use auto, exact, ivfflat or hnsw.")
+        raise SystemExit(f"PMB_INDEX={INDEX_KIND!r}. Use auto, exact, ivfflat or hnsw.")
 
     # The vector store is the same Postgres as the relational store: one database, one backup.
     for key in ("HOST", "PORT", "NAME", "USERNAME", "PASSWORD"):

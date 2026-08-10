@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from brain import config, retrieve
+from plugmybrain import config, retrieve
 
 
 def _graphify() -> str:
@@ -24,7 +24,7 @@ def _graphify() -> str:
 def map_folder(target: Path) -> tuple[Path, Path]:
     """Build a code map for `target`. Returns (graph.json, the report copied into the vault).
 
-    Writes only under BRAIN_GRAPH_DIR and the vault's generated area, never into `target`.
+    Writes only under PMB_GRAPH_DIR and the vault's generated area, never into `target`.
     """
     target = target.resolve()
     if not target.is_dir():
@@ -45,7 +45,7 @@ def map_folder(target: Path) -> tuple[Path, Path]:
             f"graphify failed on {target}.\n"
             "A folder with no source files is the usual cause: --code-only indexes code only, "
             "so a documentation or markdown folder produces an empty graph. "
-            "Documents belong to `brain ingest`, not `brain map`."
+            "Documents belong to `pmb ingest`, not `pmb map`."
         )
 
     produced = out_parent / "graphify-out"
@@ -88,7 +88,7 @@ def _print_ingest(report) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="brain", description="Plug-and-play memory brain.")
+    parser = argparse.ArgumentParser(prog="pmb", description="Plug-and-play memory brain.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     map_cmd = sub.add_parser("map", help="build a Graphify code map for a folder")
@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command in ("ingest", "sync"):
-        from brain import ingest as ingest_module
+        from plugmybrain import ingest as ingest_module
 
         if args.command == "sync":
             paths, dataset = list(config.CURATED_PATHS), config.CURATED_DATASET
@@ -158,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "export":
-        from brain import export as export_module
+        from plugmybrain import export as export_module
 
         report = asyncio.run(export_module.export(args.project, limit=args.limit))
         print(f"wrote {report.written} of {report.total} node(s) to {report.directory}")
@@ -169,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "eval":
-        from brain import eval as eval_module
+        from plugmybrain import eval as eval_module
 
         report = asyncio.run(eval_module.run(dataset=args.project))
         for answer in report.answers:
@@ -186,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
         import uvicorn
 
         # Cloud Run injects PORT and the container must read it rather than hardcode 8080.
-        uvicorn.run("brain.api:app", host=args.host, port=int(os.getenv("PORT", "8080")))
+        uvicorn.run("plugmybrain.api:app", host=args.host, port=int(os.getenv("PORT", "8080")))
         return 0
 
     return 1

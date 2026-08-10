@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from brain import config, retrieve
+from plugmybrain import config, retrieve
 
 QUESTIONS = config.REPO_ROOT / "questions.yaml"
 

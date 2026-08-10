@@ -1,4 +1,4 @@
-# Brain API
+# PlugMyBrain API
 
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.1-009688?logo=fastapi&logoColor=white)
 ![API](https://img.shields.io/badge/API-v1-4C1D95)

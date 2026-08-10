@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from brain import config
+from plugmybrain import config
 
 # A vault is a human-readable thing. Dumping ten thousand generated notes into one makes the
 # graph view useless, so the export is capped and says what it dropped.

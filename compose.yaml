@@ -3,11 +3,11 @@
 services:
   postgres:
     image: pgvector/pgvector:0.8.6-pg18
-    container_name: brain-pg
+    container_name: pmb-pg
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${DB_NAME:-brain}
-      POSTGRES_USER: ${DB_USERNAME:-brain}
+      POSTGRES_DB: ${DB_NAME:-plugmybrain}
+      POSTGRES_USER: ${DB_USERNAME:-plugmybrain}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
     # Tuned for 2 GiB with a swapfile behind it. Passed as flags so there is no config file to
     # mount, drift, or forget. Raise these together with the VM, not on their own.
@@ -27,19 +27,19 @@ services:
       # Loopback only. Reached from the laptop through the SSH tunnel, never over the network.
       - "127.0.0.1:5432:5432"
     volumes:
-      - brain-pgdata:/var/lib/postgresql/data
+      - pmb-pgdata:/var/lib/postgresql/data
       # Runs once, on an empty data directory. pgvector ships in the image but the extension
       # still has to be created inside the target database.
       - ./scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/10-pgvector.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-brain} -d ${DB_NAME:-brain}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-plugmybrain} -d ${DB_NAME:-plugmybrain}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   cognee-mcp:
     build: .
-    container_name: brain-mcp
+    container_name: pmb-mcp
     restart: unless-stopped
     command: ["cognee-mcp", "--transport", "http"]
     env_file: .env
@@ -64,7 +64,7 @@ services:
     # alongside serving. On 2 GiB that is the difference between slow and OOM-killed, and a
     # file that enforces it beats remembering to.
     profiles: ["ingest"]
-    command: ["brain", "sync"]
+    command: ["pmb", "sync"]
     env_file: .env
     environment:
       DB_HOST: postgres
@@ -72,10 +72,10 @@ services:
     mem_limit: 1200m
     volumes:
       # The vault, read-only: ingestion reads the curated rules and must never write to them.
-      - ${BRAIN_VAULT:-../docs}:/vault:ro
+      - ${PMB_VAULT:-../docs}:/vault:ro
     depends_on:
       postgres:
         condition: service_healthy
 
 volumes:
-  brain-pgdata:
+  pmb-pgdata:

@@ -1,4 +1,4 @@
-# Brain
+# PlugMyBrain
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![Conda](https://img.shields.io/badge/Conda-Miniconda-44A833?logo=anaconda&logoColor=white)
@@ -32,7 +32,7 @@ resolve to different interpreters, and an install lands somewhere the code canno
 **2. Code map.** No API key, no network, nothing uploaded.
 
 ```bash
-brain map /path/to/any-project
+pmb map /path/to/any-project
 ```
 
 **3. Configuration.** Copy the template and fill it in by hand.
@@ -65,13 +65,13 @@ on an empty data directory, so if you ever change it, `docker compose down -v` f
 **5. Estimate before you spend.** `add` is free; `cognify` calls the model once per chunk.
 
 ```bash
-brain sync --dry-run
+pmb sync --dry-run
 ```
 
 **6. Ingest the curated rules and memory.**
 
 ```bash
-brain sync                                     # laptop, against whatever DB_HOST points at
+pmb sync                                     # laptop, against whatever DB_HOST points at
 docker compose run --rm cognee-ingest          # on the VM, one-shot
 ```
 
@@ -82,7 +82,7 @@ swallowed, because a silent skip reads as "covered everything" when it did not.
 **7. Validate.**
 
 ```bash
-brain eval
+pmb eval
 ```
 
 Ten questions against the vault's own rules, two of them multi-hop, scored on whether the
@@ -91,8 +91,8 @@ right source file is cited. It also reports p50 and p95 on the warm path.
 **8. Optional: the HTTP API and the graph export.**
 
 ```bash
-brain serve                      # http://127.0.0.1:8080/health
-brain export --project curated   # knowledge graph into the vault, as wikilink notes
+pmb serve                      # http://127.0.0.1:8080/health
+pmb export --project curated   # knowledge graph into the vault, as wikilink notes
 ```
 
 ## Deployment
@@ -102,12 +102,12 @@ VM. No Cloud Run, no Cloud SQL, no Secret Manager. See `## Deviations From the S
 
 | Runs on the VM | Runs on the laptop |
 | :- | :- |
-| `postgres`, always on, loopback only | `brain map`, entirely local, no network at all |
+| `postgres`, always on, loopback only | `pmb map`, entirely local, no network at all |
 | `cognee-mcp`, always on, loopback only | The Obsidian vault, which you edit |
 | `cognee-ingest`, one-shot, behind a compose profile | Claude Code and Codex, via the tunnel |
-| The nightly `pg_dump` | `brain export` and `brain sync`, via the tunnel |
+| The nightly `pg_dump` | `pmb export` and `pmb sync`, via the tunnel |
 
-If the tunnel is down, `brain map` still answers code-structure questions. Only the document
+If the tunnel is down, `pmb map` still answers code-structure questions. Only the document
 brain becomes unreachable. That is the intended degradation, not an outage.
 
 ### 1. Create the VM
@@ -115,7 +115,7 @@ brain becomes unreachable. That is the intended degradation, not an outage.
 Nothing here is run for you. Substitute your own project and confirm the cost first.
 
 ```bash
-export PROJECT=[PROJECT]  ZONE=asia-southeast1-a  VM=brain
+export PROJECT=[PROJECT]  ZONE=asia-southeast1-a  VM=plugmybrain
 gcloud compute instances create $VM --project $PROJECT --zone $ZONE \
   --machine-type e2-small \
   --image-family debian-12 --image-project debian-cloud \
@@ -128,7 +128,7 @@ how a data directory gets corrupted, and disk is the cheapest part of this.
 Lock SSH to Identity-Aware Proxy so the tunnel is the only door, and open nothing else:
 
 ```bash
-gcloud compute firewall-rules create brain-iap-ssh --project $PROJECT \
+gcloud compute firewall-rules create pmb-iap-ssh --project $PROJECT \
   --allow tcp:22 --source-ranges 35.235.240.0/20
 ```
 
@@ -145,17 +145,17 @@ sudo bash scripts/provision-vm.sh     # swap, disk check, docker at boot, Asia/J
 ### 3. Configuration, and bring it up
 
 ```bash
-sudo install -m 600 /dev/null /opt/brain/.env
-sudo vi /opt/brain/.env               # from .env.example; DB_HOST=postgres inside compose
+sudo install -m 600 /dev/null /opt/plugmybrain/.env
+sudo vi /opt/plugmybrain/.env               # from .env.example; DB_HOST=postgres inside compose
 sudo docker compose up -d
 ```
 
-`.env` is `0600` and root-owned, so the stack runs as root from `/opt/brain`.
+`.env` is `0600` and root-owned, so the stack runs as root from `/opt/plugmybrain`.
 
 ### 4. The tunnel, from the laptop
 
 ```powershell
-$env:BRAIN_VM="brain"; $env:BRAIN_ZONE="asia-southeast1-a"; $env:BRAIN_PROJECT="[PROJECT]"
+$env:PMB_VM="plugmybrain"; $env:PMB_ZONE="asia-southeast1-a"; $env:PMB_PROJECT="[PROJECT]"
 .\scripts\tunnel.ps1
 ```
 
@@ -177,7 +177,7 @@ Set `BACKUP_BUCKET` in the VM's `.env`, then schedule it:
 
 ```bash
 sudo crontab -e
-# 0 3 * * * /opt/brain/scripts/backup.sh >> /var/log/brain-backup.log 2>&1
+# 0 3 * * * /opt/plugmybrain/scripts/backup.sh >> /var/log/pmb-backup.log 2>&1
 ```
 
 The timezone is set by `provision-vm.sh`. Without it cron runs UTC and 03:00 becomes 10:00
@@ -187,7 +187,7 @@ script that fails quietly is worse than none: it is trusted.
 A disk snapshot schedule is the zero-maintenance complement and covers a different failure:
 
 ```bash
-gcloud compute resource-policies create snapshot-schedule brain-nightly \
+gcloud compute resource-policies create snapshot-schedule pmb-nightly \
   --project $PROJECT --region asia-southeast1 \
   --max-retention-days 14 --daily-schedule --start-time 19:00
 ```
@@ -195,24 +195,24 @@ gcloud compute resource-policies create snapshot-schedule brain-nightly \
 ### 6. Restore
 
 ```bash
-gcloud storage cp gs://[BUCKET]/brain-YYYY-MM-DD.sql.gz .
-gunzip -c brain-YYYY-MM-DD.sql.gz | docker compose exec -T postgres psql -U brain -d brain
+gcloud storage cp gs://[BUCKET]/plugmyplugmybrain-YYYY-MM-DD.sql.gz .
+gunzip -c plugmybrain-YYYY-MM-DD.sql.gz | docker compose exec -T postgres psql -U plugmybrain -d plugmybrain
 ```
 
 **Restore once into a scratch database before you trust it.** An untested backup is not a
 backup. And the real durable store is the markdown vault: worst case, the whole database is
-rebuildable by re-running `brain sync`.
+rebuildable by re-running `pmb sync`.
 
 ## Usage
 
 ```bash
-brain map    /path/to/project          # code structure, zero API tokens
-brain ingest /path/to/project          # that project's documents, into its own dataset
-brain search "how is auth handled" --project project
-brain sync                             # re-ingest the curated rules and memory
-brain export --project project         # knowledge graph as vault notes
-brain eval                             # score and latency
-brain serve                            # the HTTP API
+pmb map    /path/to/project          # code structure, zero API tokens
+pmb ingest /path/to/project          # that project's documents, into its own dataset
+pmb search "how is auth handled" --project project
+pmb sync                             # re-ingest the curated rules and memory
+pmb export --project project         # knowledge graph as vault notes
+pmb eval                             # score and latency
+pmb serve                            # the HTTP API
 ```
 
 The dataset is the folder's own name, and it is required on every read. That is what keeps one
@@ -224,8 +224,8 @@ Every variable the project reads. Names only; see [[env.rules.md]].
 
 | Variable | Required | Description |
 | :- | :- | :- |
-| `BRAIN_VAULT` | No | Path to the Obsidian vault. Defaults to the sibling `docs` checkout |
-| `BRAIN_GRAPH_DIR` | No | Where Graphify output lands. Defaults to `graph/` |
+| `PMB_VAULT` | No | Path to the Obsidian vault. Defaults to the sibling `docs` checkout |
+| `PMB_GRAPH_DIR` | No | Where Graphify output lands. Defaults to `graph/` |
 | `DB_HOST` `DB_PORT` `DB_NAME` `DB_USERNAME` | Yes | PostgreSQL connection. `postgres:5432` inside compose, `127.0.0.1:15432` from the laptop over the tunnel |
 | `DB_PASSWORD` | Yes | Database password |
 | `EMBEDDING_PROVIDER` `EMBEDDING_MODEL` | Yes | `voyage` and `voyage/voyage-3.5` |
@@ -235,10 +235,10 @@ Every variable the project reads. Names only; see [[env.rules.md]].
 | `LLM_API_KEY` | Yes | Unless `LLM_PROVIDER=mcp-sampling`, which only works inside an MCP session |
 | `POOL_ARGS` `VECTOR_POOL_ARGS` | No | Connection pool sizing |
 | `CHUNK_SIZE` `CHUNK_OVERLAP` | No | Ingestion chunking |
-| `BRAIN_INDEX` | No | `auto`, `exact`, `ivfflat` or `hnsw`. Default `auto` |
-| `BRAIN_INDEX_THRESHOLD` | No | Rows below which exact search beats an index. Default 10000 |
+| `PMB_INDEX` | No | `auto`, `exact`, `ivfflat` or `hnsw`. Default `auto` |
+| `PMB_INDEX_THRESHOLD` | No | Rows below which exact search beats an index. Default 10000 |
 | `BACKUP_BUCKET` `BACKUP_KEEP_DAYS` | No | VM only. Nightly `pg_dump` target and retention |
-| `BRAIN_VM` `BRAIN_ZONE` `BRAIN_PROJECT` | No | Laptop only. Used by `scripts/tunnel.ps1` |
+| `PMB_VM` `PMB_ZONE` `PMB_PROJECT` | No | Laptop only. Used by `scripts/tunnel.ps1` |
 
 ## Data
 
@@ -246,7 +246,7 @@ Nothing here is committed.
 
 | Item | Location | Notes |
 | :- | :- | :- |
-| Code maps | `graph/<project>/graphify-out/` | Gitignored. Produced by `brain map` |
+| Code maps | `graph/<project>/graphify-out/` | Gitignored. Produced by `pmb map` |
 | Code reports | `<vault>/graph/code/<project>/` | Gitignored in the vault. Never hand-edited |
 | Graph export | `<vault>/graph/kg/<dataset>/` | Gitignored in the vault. Never hand-edited |
 | The memory itself | `<vault>/memory/` and `<vault>/rules/` | Committed, human-authored, the source of truth |
@@ -254,7 +254,7 @@ Nothing here is committed.
 ## Project Structure
 
 ```text
-brain/
+plugmybrain/
   config.py      # paths, the exclusion list, the dimension and index guards
   ingest.py      # add, cognify, then the vector index cognee does not create
   retrieve.py    # dataset-scoped search
@@ -284,7 +284,7 @@ pytest                # tests
 **"Local" describes the database only.** In both profiles every ingested document is sent to
 the cloud model for extraction and embedding. Data leaves the machine either way.
 
-The code map does not: `brain map` runs tree-sitter locally with `--code-only` and makes no
+The code map does not: `pmb map` runs tree-sitter locally with `--code-only` and makes no
 network call at all. That is why code structure comes from Graphify and documents from Cognee,
 rather than putting source through the model.
 
@@ -306,15 +306,15 @@ pasted into an ordinary `.md` still gets through.
 - **The first corpus gets no vector index, on purpose.** pgvector sizes IVFFlat at
   `lists = rows / 1000`, so a few hundred chunks would produce a one-list index: a sequential
   scan carrying index overhead. Exact search over the same rows is faster and has perfect
-  recall. `brain sync` prints which index each table got and the row count that decided it.
+  recall. `pmb sync` prints which index each table got and the row count that decided it.
 - **HNSW is opt-in and wants roughly 4 GiB.** On a 2 GiB VM the index build is the thing that
-  gets OOM-killed. `BRAIN_INDEX=hnsw` after resizing, not before.
+  gets OOM-killed. `PMB_INDEX=hnsw` after resizing, not before.
 - **Ingestion and serving must not run at once on 2 GiB.** `cognee-ingest` sits behind a
   compose profile so `docker compose up -d` cannot start it, and both cognee containers carry
   a `mem_limit` so Docker kills them before the kernel picks Postgres by size.
 - **One VM is one point of failure.** Accepted for a personal brain. The nightly `pg_dump` is
   the mitigation, and the markdown vault is the real durable store: the database is rebuildable
-  from files by re-running `brain sync`.
+  from files by re-running `pmb sync`.
 - **There is no single no-model mode returning chunks and graph context together.** `chunks`
   returns sourced context with no completion step, `graph` spends an extra call. A combined
   retrieval mode would be a second query, and it is not built until the eval asks for it.
@@ -328,7 +328,7 @@ pasted into an ordinary `.md` still gets through.
 Written down because [[deploy.rules.md]] and [[secret.rules.md]] require a deviation to say why.
 
 1. **Not Cloud Run.** [[deploy.rules.md]] requires every deployed project to ship to Cloud Run
-   via Cloud Build and Artifact Registry. The brain runs as one Docker stack on a flat-cost
+   via Cloud Build and Artifact Registry. PlugMyBrain runs as one Docker stack on a flat-cost
    Compute Engine VM instead. That file now carries a named exception for this one project;
    the reasoning is in `docs/memory/decision/`. In short: an always-on Postgres has no idle
    state to scale down to, so the managed equivalent bills a monthly floor for something a

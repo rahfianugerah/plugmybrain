@@ -1,4 +1,4 @@
-# Ingestion: add, cognify, index. This file is `brain ingest`, `brain sync`, and the one-shot
+# Ingestion: add, cognify, index. This file is `pmb ingest`, `pmb sync`, and the one-shot
 # `cognee-ingest` container. Never co-resident with serving on a 2 GiB VM.
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from brain import config
+from plugmybrain import config
 
 # Table and column names come from information_schema, never from a user, but Postgres will not
 # bind an identifier so they still reach the DDL by interpolation. The allowlist is what makes

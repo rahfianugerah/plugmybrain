@@ -2,18 +2,18 @@
 # drops. Uses gcloud and the built-in Windows OpenSSH client; nothing new is installed.
 #
 #   8000 -> the Cognee MCP server, what Claude Code and Codex connect to
-#  15432 -> Postgres, what `brain export` and `brain sync` use
+#  15432 -> Postgres, what `pmb export` and `pmb sync` use
 #
 # 15432 rather than 5432 on purpose: the laptop may run its own Postgres on 5432, and a forward
 # onto an occupied port fails in a way that reads as a database problem.
 param(
-    [string]$Vm      = $env:BRAIN_VM,
-    [string]$Zone    = $env:BRAIN_ZONE,
-    [string]$Project = $env:BRAIN_PROJECT
+    [string]$Vm      = $env:PMB_VM,
+    [string]$Zone    = $env:PMB_ZONE,
+    [string]$Project = $env:PMB_PROJECT
 )
 
 if (-not $Vm -or -not $Zone) {
-    Write-Error "set BRAIN_VM and BRAIN_ZONE, or pass -Vm and -Zone"
+    Write-Error "set PMB_VM and PMB_ZONE, or pass -Vm and -Zone"
     exit 1
 }
 

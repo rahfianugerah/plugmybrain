@@ -41,8 +41,8 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 systemctl enable --now docker
 
-install -d -m 700 /opt/brain
-install -d -m 700 /var/backups/brain
+install -d -m 700 /opt/plugmybrain
+install -d -m 700 /var/backups/plugmybrain
 
 echo "provisioned: ${SWAP_GB}G swap, ${disk_gb}G disk, timezone ${TZ_NAME}, docker enabled at boot"
-echo "next: put the repo in /opt/brain, write /opt/brain/.env (chmod 600), then docker compose up -d"
+echo "next: put the repo in /opt/plugmybrain, write /opt/plugmybrain/.env (chmod 600), then docker compose up -d"

@@ -1,19 +1,19 @@
 # Package metadata and tool config. The environment itself is `environment.yml`.
 [project]
-name = "brain"
+name = "plugmybrain"
 version = "0.1.0"
 description = "A plug-and-play memory brain: Graphify code maps, Cognee knowledge graph, Obsidian control plane"
 requires-python = ">=3.13"
 
 [project.scripts]
-brain = "brain.cli:main"
+pmb = "plugmybrain.cli:main"
 
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["brain*"]
+include = ["plugmybrain*"]
 
 [tool.ruff]
 line-length = 100

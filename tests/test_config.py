@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from brain import config, ingest
+from plugmybrain import config, ingest
 
 
 def test_namespace_is_the_lowercased_directory_name():
