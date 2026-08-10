@@ -1,0 +1,13 @@
+# The `env` conda environment. Profile-agnostic: identical for `local` and `cloud`.
+name: env
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.13
+  - pip
+  - ruff
+  - pytest
+  - pip:
+      # Not on conda-forge, so they come from PyPI.
+      - graphifyy==0.9.38

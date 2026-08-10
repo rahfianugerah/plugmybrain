@@ -1,0 +1,19 @@
+# Exclusion list for this repository's own code map. Gitignore syntax.
+# Graphify reads this from the folder it scans, so it protects `brain/` only.
+# The enforcement that covers an arbitrary target lives in `brain/ingest.py`,
+# because that is where file contents actually leave the machine.
+.env
+.env.*
+!.env.example
+env-vars.yaml
+*.pem
+*.key
+*.p12
+credentials.json
+jwt-secret.txt
+keys/
+graph/
+.venv/
+node_modules/
+dist/
+__pycache__/

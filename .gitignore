@@ -1,0 +1,19 @@
+# Written before any config file exists, so a real value never has a window to be staged.
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+env-vars.yaml
+!env-vars.example.yaml
+*.pem
+*.key
+graph/
+.last-tag
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# graphify drops a stat cache in the working directory whatever --out says.
+graphify-out/
