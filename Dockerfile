@@ -2,7 +2,11 @@
 FROM python:3.13-slim AS build
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
+ # --no-deps on purpose: cognee-mcp declares cognee[docs,neo4j,postgres-binary], and the docs
+ # extra pulls torch, triton and 2.7GB of CUDA libraries onto a VM with no GPU. Base cognee
+ # and the two packages in requirements.txt are everything it imports.
+ && pip install --no-cache-dir --prefix=/install --no-deps cognee-mcp==0.5.5
 
 FROM python:3.13-slim
 RUN useradd -m app

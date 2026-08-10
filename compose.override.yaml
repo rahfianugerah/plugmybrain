@@ -1,6 +1,15 @@
 # Laptop dev. Compose reads this automatically, so `docker compose up -d` here brings up
 # Postgres alone and the CLI runs natively against it. The VM never has this file.
 services:
+  postgres:
+    # !override, not a plain list: compose merges `ports` by appending, so without it this
+    # adds 15432 and keeps 5432, and the bind still fails on a machine that owns 5432.
+    ports: !override
+      # 15432, because a development machine usually already runs Postgres on 5432. This also
+      # matches DB_PORT in .env.example, which is 15432 for the laptop either way: local
+      # container now, forwarded from the VM later.
+      - "127.0.0.1:15432:5432"
+
   cognee-mcp:
     # On the laptop the agents talk to the VM, not to a second MCP server. Zero replicas keeps
     # the service defined but not running, so the compose file stays identical on both hosts.

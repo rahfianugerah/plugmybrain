@@ -5,8 +5,22 @@
 # cognee-mcp versions independently of cognee core; 0.5.5 is the current release and it
 # requires cognee>=1.1.0,<2.0.0, so the 1.4.2 pin below satisfies it. It also drags in the
 # docs and neo4j extras, which is weight this VM does not use but cannot decline.
-cognee[postgres]==1.4.2
-cognee-mcp==0.5.5
+# postgres-binary, not postgres: the plain extra pulls psycopg2 from source, which needs
+# pg_config and a compiler that python:3.13-slim does not ship. The binary extra is prebuilt
+# wheels, and it is what cognee-mcp asks for anyway.
+cognee[postgres-binary]==1.4.2
+
+# cognee-mcp is installed --no-deps in the Dockerfile, because its dependency line is
+# cognee[docs,neo4j,postgres-binary] and the docs extra drags in torch, triton and 2.7GB of
+# NVIDIA CUDA libraries. Measured: base cognee needs none of it, and this box has no GPU.
+# These are what cognee-mcp actually imports, so they are declared here instead. The bounds
+# are copied verbatim from its own dependency line and the upper ones are load-bearing:
+# mcp 2.0.0 moved FastMCP out of mcp.server, so an unbounded >=1.12.0 installs a version
+# cognee-mcp cannot import.
+mcp>=1.12.0,<2.0.0
+httpx>=0.27.0,<1.0.0
+uv>=0.6.3,<1.0.0
+
 asyncpg
 python-dotenv
 pyyaml

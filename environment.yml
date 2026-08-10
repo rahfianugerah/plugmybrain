@@ -13,9 +13,13 @@ dependencies:
   - ruff
   - pytest
   - pip:
-      # cognee-mcp versions independently of cognee core and requires cognee>=1.1.0,<2.0.0.
-      - cognee[postgres]==1.4.2
-      - cognee-mcp==0.5.5
+      # postgres-binary, not postgres: the plain extra builds psycopg2 from source and needs
+      # pg_config plus a compiler. The binary extra is prebuilt wheels.
+      - cognee[postgres-binary]==1.4.2
+      # cognee-mcp runs in the container, not here. If you ever want it locally, install it
+      # with --no-deps: its dependency line pulls torch, triton and 2.7GB of CUDA libraries
+      # through the docs extra, and nothing in this project uses them.
+      - mcp>=1.12.0
       - graphifyy==0.9.38
       - asyncpg
       - python-dotenv

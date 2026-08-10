@@ -25,9 +25,15 @@ services:
       - max_connections=20
     ports:
       # Loopback only. Reached from the laptop through the SSH tunnel, never over the network.
-      - "127.0.0.1:5432:5432"
+      # The host port is a variable because a machine that already runs Postgres owns 5432, and
+      # the failure is an opaque socket-permission error rather than "port in use".
+      - "127.0.0.1:${DB_PUBLISH_PORT:-5432}:5432"
     volumes:
-      - pmb-pgdata:/var/lib/postgresql/data
+      # /var/lib/postgresql, NOT /var/lib/postgresql/data. From 18 the official images store
+      # data in a major-version subdirectory so pg_upgrade --link works across a single mount.
+      # Mounting the old path makes the container refuse to start, with a message about
+      # pg_ctlcluster that reads like a corrupted volume rather than a wrong mount point.
+      - pmb-pgdata:/var/lib/postgresql
       # Runs once, on an empty data directory. pgvector ships in the image but the extension
       # still has to be created inside the target database.
       - ./scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/10-pgvector.sql:ro
@@ -41,19 +47,34 @@ services:
     build: .
     container_name: pmb-mcp
     restart: unless-stopped
-    command: ["cognee-mcp", "--transport", "http"]
+    # Host, port and path are CLI flags on this binary, confirmed with --help. Passing them as
+    # env vars looked right and was silently ignored. 0.0.0.0 inside the container is correct:
+    # the publish below scopes it to the VM's loopback, so the tunnel is still the only way in.
+    command:
+      ["cognee-mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8000",
+       "--path", "/mcp"]
     env_file: .env
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"
-      HTTP_PORT: "8000"
-      # 0.0.0.0 inside the container is correct: the publish below is what scopes it, and it
-      # scopes it to the VM's loopback. Nothing reaches this except through the tunnel.
-      BIND_ADDRESS: "0.0.0.0"
+      # cognee-mcp 0.5.5 ships src/__init__.py doing `from server import main`, a bare
+      # top-level import of a module that lives inside its own package. It only resolves with
+      # src/ on sys.path. Scoped to this service so it cannot shadow anything in pmb.
+      PYTHONPATH: /usr/local/lib/python3.13/site-packages/src
+      # Without these cognee writes its system state into site-packages, which a container
+      # restart throws away. Postgres holds the real data; this is the rest.
+      DATA_ROOT_DIRECTORY: /data/cognee
+      SYSTEM_ROOT_DIRECTORY: /data/cognee-system
+      # cognee 1.x defaults to authentication required and multi-tenant on. This is one
+      # person's brain behind an SSH tunnel, so both are off: the tunnel is the boundary.
+      REQUIRE_AUTHENTICATION: "false"
+      ENABLE_BACKEND_ACCESS_CONTROL: "false"
     # Docker kills this before the kernel picks a victim by size, which would be Postgres.
     mem_limit: 900m
     ports:
       - "127.0.0.1:8000:8000"
+    volumes:
+      - pmb-cognee:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,8 +90,13 @@ services:
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"
+      DATA_ROOT_DIRECTORY: /data/cognee
+      SYSTEM_ROOT_DIRECTORY: /data/cognee-system
+      REQUIRE_AUTHENTICATION: "false"
+      ENABLE_BACKEND_ACCESS_CONTROL: "false"
     mem_limit: 1200m
     volumes:
+      - pmb-cognee:/data
       # The vault, read-only: ingestion reads the curated rules and must never write to them.
       - ${PMB_VAULT:-../docs}:/vault:ro
     depends_on:
@@ -79,3 +105,5 @@ services:
 
 volumes:
   pmb-pgdata:
+  # Cognee's own system state. Small, but it must outlive a container restart.
+  pmb-cognee:
