@@ -1,0 +1,9 @@
+# The image's dependency tree. Mirrors the pip block in environment.yml, which is what the
+# `env` conda environment installs. Graphify is absent on purpose: mapping is a local command,
+# never a deployed one.
+cognee[postgres]==1.4.2
+asyncpg
+python-dotenv
+pyyaml
+fastapi
+uvicorn[standard]

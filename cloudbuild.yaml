@@ -1,0 +1,57 @@
+# Cloud Build pipeline for the brain: one image, deployed as a service and pinned into a job.
+# From the vault templates in gcp/, merged because the service and the job share an image.
+#
+# Written, not run. The `local` profile is what this project uses today; this file exists so
+# the `cloud` profile is real rather than aspirational. Configuration is attached at deploy
+# time by the runbook in README.md, which is why nothing here carries --set-env-vars.
+
+substitutions:
+  _REGION: asia-southeast1
+  _REPOSITORY: '[REPOSITORY]'
+  _SERVICE: brain
+  _JOB: ingest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:${_TAG}'
+
+steps:
+  - id: guard
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ -z "${_TAG}" ]; then
+          echo "_TAG is empty. Pass --substitutions=_TAG=\$(git rev-parse --short HEAD)"
+          exit 1
+        fi
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:${_TAG}'
+      - '.'
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:${_TAG}'
+
+  # A job pins the image it was created with, so without this it keeps running old code forever.
+  - id: update-job
+    name: gcr.io/cloud-builders/gcloud
+    args:
+      - run
+      - jobs
+      - update
+      - '${_SERVICE}-${_JOB}'
+      - '--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:${_TAG}'
+      - '--region=${_REGION}'
+
+timeout: 1200s

@@ -1,0 +1,14 @@
+.git
+.venv
+graph
+graphify-out
+__pycache__
+.pytest_cache
+.ruff_cache
+*.egg-info
+.env
+.env.*
+env-vars.yaml
+*.pem
+*.key
+tests

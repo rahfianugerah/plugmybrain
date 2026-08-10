@@ -1,4 +1,8 @@
-# The `env` conda environment. Profile-agnostic: identical for `local` and `cloud`.
+# The `env` conda environment. Profile-agnostic: identical for local and cloud.
+#
+# Tools come from conda-forge; the application tree comes from pip. Splitting them that way
+# avoids the conda and pip resolvers fighting over cognee's transitive dependencies, which is
+# the usual way a mixed environment breaks.
 name: env
 channels:
   - conda-forge
@@ -9,5 +13,10 @@ dependencies:
   - ruff
   - pytest
   - pip:
-      # Not on conda-forge, so they come from PyPI.
+      - cognee[postgres]==1.4.2
       - graphifyy==0.9.38
+      - asyncpg
+      - python-dotenv
+      - pyyaml
+      - fastapi
+      - uvicorn[standard]

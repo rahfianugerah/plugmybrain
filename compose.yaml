@@ -1,0 +1,24 @@
+# The whole `local` profile database: relational, vector and graph in one PostgreSQL 18.
+services:
+  db:
+    image: pgvector/pgvector:0.8.6-pg18
+    container_name: brain-pg
+    environment:
+      POSTGRES_DB: ${DB_NAME:-brain}
+      POSTGRES_USER: ${DB_USERNAME:-brain}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - brain-pgdata:/var/lib/postgresql/data
+      # Runs once, on an empty data directory. pgvector ships in the image but the extension
+      # still has to be created inside the target database.
+      - ./scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/10-pgvector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-brain} -d ${DB_NAME:-brain}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  brain-pgdata:

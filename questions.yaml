@@ -1,0 +1,39 @@
+# The validation set for the `curated` dataset: the vault's own rules and memory.
+# `expect` lists source files that must appear among the cited sources for the answer to count.
+
+- question: What must never appear in a commit message or a pull request description?
+  expect: [commit.rules.md]
+
+- question: Which Python version do these projects use, and which linter?
+  expect: [codes.rules.md]
+
+- question: Why is a real environment file never read, in any format?
+  expect: [env.rules.md]
+
+- question: What test decides whether a value is a secret rather than configuration?
+  expect: [secret.rules.md]
+
+- question: Which region is the default for deployment, and why is Jakarta not used?
+  expect: [deploy.rules.md]
+
+- question: Which four files does every project document, and when does each apply?
+  expect: [docs.rules.md]
+
+- question: When is something worth writing into the memory as a note?
+  expect: [memory.rules.md]
+
+- question: Should a vector be stored in pgvector or in a file?
+  expect: [database.rules.md]
+
+# Multi-hop: the answer is not in any single document. Adding a rule touches the rule itself,
+# the Index block that only README.md carries, and the badge count that must not go stale.
+- question: A new rule document is added to the vault. Which other files must change in the
+    same commit, and why does the badge matter?
+  expect: [docs.rules.md, badge.rules.md]
+  multihop: true
+
+# Multi-hop: the branch rule defers to the memory rule for where the finding is recorded.
+- question: An experiment branch is abandoned. What has to happen before it is deleted, and
+    where does the outcome get written?
+  expect: [branch.rules.md, memory.rules.md]
+  multihop: true

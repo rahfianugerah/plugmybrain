@@ -1,13 +1,15 @@
-# The single entry point. Phase 1 implements `map`; ingest, search, export and eval land in Phase 2.
+# The single entry point. Printing lives here; every other module returns data instead.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from brain import config
+from brain import config, retrieve
 
 
 def _graphify() -> str:
@@ -53,10 +55,7 @@ def map_folder(target: Path) -> tuple[Path, Path]:
 
     # `extract` writes graph.json only. GRAPH_REPORT.md and graph.html come from clustering,
     # and --no-label keeps community naming off the LLM, so the whole map stays at zero tokens.
-    subprocess.run(
-        [_graphify(), "cluster-only", str(out_parent), "--no-label"],
-        check=True,
-    )
+    subprocess.run([_graphify(), "cluster-only", str(out_parent), "--no-label"], check=True)
 
     report = produced / "GRAPH_REPORT.md"
     if not report.is_file():
@@ -68,6 +67,24 @@ def map_folder(target: Path) -> tuple[Path, Path]:
     return graph, destination
 
 
+def _print_ingest(report) -> None:
+    print(f"dataset:  {report.dataset}")
+    print(f"ingested: {report.ingested} document(s)")
+    print(f"skipped:  {len(report.skipped)} file(s) by the exclusion list")
+    for path in report.skipped[:10]:
+        print(f"          {path}")
+    if len(report.skipped) > 10:
+        print(f"          ... and {len(report.skipped) - 10} more")
+    if report.estimate is not None:
+        print(f"estimate: {report.estimate}")
+    if report.indexes_created:
+        print(f"indexed:  {', '.join(report.indexes_created)}")
+    elif report.estimate is None:
+        print("indexed:  no new vector column needed an HNSW index")
+    for refused in report.indexes_refused:
+        print(f"REFUSED:  {refused} did not match the identifier allowlist and was left unindexed")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="brain", description="Plug-and-play memory brain.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -75,12 +92,99 @@ def main(argv: list[str] | None = None) -> int:
     map_cmd = sub.add_parser("map", help="build a Graphify code map for a folder")
     map_cmd.add_argument("target", type=Path, help="the folder to map")
 
+    ingest_cmd = sub.add_parser("ingest", help="ingest a folder's documents into its own dataset")
+    ingest_cmd.add_argument("target", type=Path, help="the folder to ingest")
+    ingest_cmd.add_argument(
+        "--dry-run", action="store_true", help="estimate the cognify cost and stop"
+    )
+    ingest_cmd.add_argument("--memify", action="store_true", help="run the extra enrichment pass")
+
+    sync_cmd = sub.add_parser("sync", help="re-ingest the curated rules and memory")
+    sync_cmd.add_argument(
+        "--dry-run", action="store_true", help="estimate the cognify cost and stop"
+    )
+
+    search_cmd = sub.add_parser("search", help="search one dataset")
+    search_cmd.add_argument("query")
+    search_cmd.add_argument("--project", required=True, help="the dataset to search")
+    search_cmd.add_argument("--mode", default="chunks", choices=list(retrieve.MODES))
+    search_cmd.add_argument("--top-k", type=int, default=15)
+
+    export_cmd = sub.add_parser("export", help="render the knowledge graph as vault notes")
+    export_cmd.add_argument("--project", required=True, help="the dataset to export")
+    export_cmd.add_argument("--limit", type=int, default=500, help="most-connected nodes to write")
+
+    eval_cmd = sub.add_parser("eval", help="score the question set and time the warm path")
+    eval_cmd.add_argument("--project", default=config.CURATED_DATASET)
+
+    serve_cmd = sub.add_parser("serve", help="run the HTTP API locally")
+    serve_cmd.add_argument("--host", default="127.0.0.1")
+
     args = parser.parse_args(argv)
 
     if args.command == "map":
         graph, report = map_folder(args.target)
         print(f"graph:  {graph}")
         print(f"report: {report}")
+        return 0
+
+    if args.command in ("ingest", "sync"):
+        from brain import ingest as ingest_module
+
+        if args.command == "sync":
+            paths, dataset = list(config.CURATED_PATHS), config.CURATED_DATASET
+        else:
+            paths, dataset = [args.target], config.namespace(args.target)
+        report = asyncio.run(
+            ingest_module.ingest(
+                paths,
+                dataset=dataset,
+                dry_run=args.dry_run,
+                memify=getattr(args, "memify", False),
+            )
+        )
+        _print_ingest(report)
+        return 0
+
+    if args.command == "search":
+        results = asyncio.run(
+            retrieve.search(args.query, dataset=args.project, mode=args.mode, top_k=args.top_k)
+        )
+        print(f"sources: {', '.join(retrieve.sources(results)) or 'none cited'}")
+        for item in results:
+            print(item)
+        return 0
+
+    if args.command == "export":
+        from brain import export as export_module
+
+        report = asyncio.run(export_module.export(args.project, limit=args.limit))
+        print(f"wrote {report.written} of {report.total} node(s) to {report.directory}")
+        if report.dropped:
+            print(
+                f"dropped {report.dropped} less-connected node(s). Raise --limit to include them."
+            )
+        return 0
+
+    if args.command == "eval":
+        from brain import eval as eval_module
+
+        report = asyncio.run(eval_module.run(dataset=args.project))
+        for answer in report.answers:
+            mark = "ok  " if answer.hit else "MISS"
+            hop = " [multi-hop]" if answer.multihop else ""
+            print(f"{mark} {answer.seconds:6.2f}s  {answer.question}{hop}")
+            if not answer.hit:
+                print(f"      expected {answer.expected}, cited {answer.found or 'nothing'}")
+        print(f"\nscore: {report.score}   p50: {report.p50:.2f}s   p95: {report.p95:.2f}s")
+        print("No Cloud Run cold start is on this path in either profile.")
+        return 0
+
+    if args.command == "serve":
+        import uvicorn
+
+        # Cloud Run injects PORT and the container must read it rather than hardcode 8080.
+        uvicorn.run("brain.api:app", host=args.host, port=int(os.getenv("PORT", "8080")))
         return 0
 
     return 1
