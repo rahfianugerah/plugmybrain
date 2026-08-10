@@ -212,7 +212,7 @@ gcloud compute resource-policies create snapshot-schedule pmb-nightly \
 ### 6. Restore
 
 ```bash
-gcloud storage cp gs://[BUCKET]/plugmyplugmybrain-YYYY-MM-DD.sql.gz .
+gcloud storage cp gs://[BUCKET]/plugmybrain-YYYY-MM-DD.sql.gz .
 gunzip -c plugmybrain-YYYY-MM-DD.sql.gz | docker compose exec -T postgres psql -U plugmybrain -d plugmybrain
 ```
 
@@ -241,7 +241,29 @@ The vault view is the one to reach for when you want the knowledge graph *next t
 that produced it, since Obsidian renders generated notes and human ones in one graph. The
 standalone HTML is the one to reach for when you just want to look.
 
-Everything under `docs/graph/` is gitignored and regenerated. Never hand-edit it.
+## Keeping What the Graph Found
+
+Everything under `docs/graph/` is gitignored and **regenerated**, so a note you edit there is
+destroyed by the next rebuild. That is the point: generated content is disposable, and the
+memory is not.
+
+When the graph surfaces something worth keeping, promote it:
+
+```bash
+pmb promote docs/graph/kg/curated/some-node.md --type fact
+```
+
+It lands in `docs/memory/<type>/` with the five-key frontmatter, a slugged filename, and a
+`**Why:**` line waiting to be filled in. From that moment it is yours: committed, editable, and
+ingested into the `curated` dataset, which **wins on conflict** with anything a machine
+inferred. Edit it, run `pmb sync`, and every agent reads your version.
+
+That is the whole loop. Cognee proposes, you decide, and the decision becomes the memory.
+
+`promote` is the only code in this project that writes above the generated area. It refuses a
+source outside `docs/graph/`, refuses to escape `docs/memory/`, and refuses to overwrite an
+existing note without `--force`, because that note is human-authored and this program did not
+write it.
 
 ## Agent Wiring
 
@@ -282,6 +304,7 @@ pmb search "how is auth handled" --project project
 pmb sync                             # re-ingest the curated rules and memory
 pmb export    --project project      # knowledge graph as vault notes
 pmb visualize --project project      # knowledge graph as one HTML file
+pmb promote  <generated-note>        # keep one: move it into the human-authored memory
 pmb eval                             # score and latency
 pmb serve                            # the HTTP API
 ```
@@ -329,7 +352,8 @@ plugmybrain/
   config.py      # paths, the exclusion list, the dimension and index guards
   ingest.py      # add, cognify, then the vector index cognee does not create
   retrieve.py    # dataset-scoped search
-  export.py      # knowledge graph to vault wikilink notes
+  export.py      # knowledge graph to vault wikilink notes, and to one HTML file
+  promote.py     # the only module that writes into the human-authored memory
   eval.py        # the question set, scored, with p50 and p95
   api.py         # the HTTP surface
   cli.py         # the one entry point

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from plugmybrain import config, ingest
+from plugmybrain import config, ingest, promote
 
 
 def test_namespace_is_the_lowercased_directory_name():
@@ -70,3 +70,39 @@ def test_auto_picks_exact_until_an_index_would_actually_help(rows, expected):
 def test_an_explicit_index_choice_is_never_overridden(kind):
     assert ingest.choose_index(50, kind=kind) == kind
     assert ingest.choose_index(5_000_000, kind=kind) == kind
+
+
+# promote is the only code that writes into the human-authored memory, so its two guards are
+# the ones worth a test: it reads only from the generated area, and it writes only into memory.
+def test_memory_path_rejects_an_unknown_note_type():
+    with pytest.raises(ValueError):
+        config.memory_path("nonsense", "x.md")
+
+
+def test_memory_path_refuses_to_escape_the_memory_folder():
+    with pytest.raises(ValueError):
+        config.memory_path("fact", "../../rules/commit.rules.md")
+
+
+def test_promote_refuses_a_source_outside_the_generated_area(tmp_path):
+    stray = tmp_path / "somewhere-else.md"
+    stray.write_text("# Not generated", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        promote.promote(stray)
+
+
+def test_a_relative_path_resolves_against_the_repo_not_the_shell(monkeypatch):
+    monkeypatch.setenv("PMB_VAULT", "../docs")
+    assert (
+        config._repo_relative("PMB_VAULT", Path("/unused"))
+        == (config.REPO_ROOT.parent / "docs").resolve()
+    )
+
+
+def test_an_absolute_path_is_left_alone(monkeypatch):
+    monkeypatch.setenv("PMB_VAULT", str(Path("/tmp/elsewhere")))
+    assert config._repo_relative("PMB_VAULT", Path("/unused")) == Path("/tmp/elsewhere").resolve()
+
+
+def test_slug_matches_the_kebab_case_filename_rule():
+    assert promote.slug("Loader uses Polars, not pandas") == "loader-uses-polars-not-pandas"

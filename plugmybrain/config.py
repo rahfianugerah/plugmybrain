@@ -8,11 +8,25 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+
+def _repo_relative(name: str, default: Path) -> Path:
+    """Read a path from the environment, resolving a relative value against the repository.
+
+    Not against the working directory: `pmb` is run from wherever you happen to be, and a
+    vault that moves with your shell is a vault that silently points at nothing.
+    """
+    value = os.getenv(name)
+    if not value:
+        return default.resolve()
+    path = Path(value)
+    return (path if path.is_absolute() else REPO_ROOT / path).resolve()
+
+
 # The vault is a sibling checkout by default, because that is how the two repos sit on disk.
-VAULT = Path(os.getenv("PMB_VAULT", REPO_ROOT.parent / "docs")).resolve()
+VAULT = _repo_relative("PMB_VAULT", REPO_ROOT.parent / "docs")
 
 # Graphify output lands here, never inside the folder that was mapped.
-GRAPH_DIR = Path(os.getenv("PMB_GRAPH_DIR", REPO_ROOT / "graph")).resolve()
+GRAPH_DIR = _repo_relative("PMB_GRAPH_DIR", REPO_ROOT / "graph")
 
 # The only part of the vault this project may write to. Everything above it is human-authored.
 VAULT_GENERATED = VAULT / "graph"
@@ -84,6 +98,22 @@ def generated_path(*parts: str) -> Path:
     return path
 
 
+NOTE_TYPES = ("fact", "decision", "session", "reference")
+
+
+def memory_path(note_type: str, filename: str) -> Path:
+    """A path inside the vault's human-authored memory. The only place this project is allowed
+    to write above the generated area, so the guard lives here and `promote.py` is its only
+    caller."""
+    if note_type not in NOTE_TYPES:
+        raise ValueError(f"unknown note type {note_type!r}. Use one of: {', '.join(NOTE_TYPES)}")
+    root = (VAULT / "memory").resolve()
+    path = (root / note_type / filename).resolve()
+    if not path.is_relative_to(root):
+        raise ValueError(f"refusing to write outside {root}: {path}")
+    return path
+
+
 def is_excluded(path: Path) -> bool:
     """True when a path must never be sent to the model.
 
@@ -140,6 +170,15 @@ def configure() -> None:
     os.environ.setdefault("VECTOR_DB_PROVIDER", "pgvector")
     os.environ.setdefault("GRAPH_DATABASE_PROVIDER", "postgres")
     os.environ.setdefault("TELEMETRY_DISABLED", "1")
+
+    # A wrong PMB_VAULT is silent otherwise: ingestion finds no documents and reports an empty
+    # corpus, which reads as "the vault is empty" rather than "the path is wrong".
+    if not (VAULT / "memory").is_dir():
+        raise SystemExit(
+            f"no vault at {VAULT} (expected a memory/ folder inside it).\n"
+            "Leave PMB_VAULT blank for the default, or set it relative to this repository, "
+            "for example ../docs."
+        )
 
     missing = [
         key for key in ("DB_HOST", "DB_NAME", "DB_USERNAME", "DB_PASSWORD") if not os.getenv(key)

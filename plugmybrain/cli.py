@@ -116,6 +116,15 @@ def main(argv: list[str] | None = None) -> int:
     export_cmd.add_argument("--project", required=True, help="the dataset to export")
     export_cmd.add_argument("--limit", type=int, default=500, help="most-connected nodes to write")
 
+    promote_cmd = sub.add_parser(
+        "promote", help="keep a generated note: copy it into the human-authored memory"
+    )
+    promote_cmd.add_argument("source", type=Path, help="a note under the vault's graph/ area")
+    promote_cmd.add_argument("--type", default="fact", choices=list(config.NOTE_TYPES))
+    promote_cmd.add_argument("--title", help="override the note's title")
+    promote_cmd.add_argument("--tags", help="comma-separated, defaults to the dataset name")
+    promote_cmd.add_argument("--force", action="store_true", help="overwrite an existing note")
+
     viz_cmd = sub.add_parser("visualize", help="render the knowledge graph as one HTML file")
     viz_cmd.add_argument("--project", required=True, help="the dataset to render")
     viz_cmd.add_argument("--max-nodes", type=int, default=500)
@@ -170,6 +179,21 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"dropped {report.dropped} less-connected node(s). Raise --limit to include them."
             )
+        return 0
+
+    if args.command == "promote":
+        from plugmybrain import promote as promote_module
+
+        report = promote_module.promote(
+            args.source,
+            note_type=args.type,
+            title=args.title,
+            tags=[t.strip() for t in args.tags.split(",")] if args.tags else None,
+            force=args.force,
+        )
+        print(f"promoted: {report.destination}")
+        print("It is yours now: committed, editable, and ingested as `curated` on the next sync.")
+        print("Fill in the Why line, then run: pmb sync")
         return 0
 
     if args.command == "visualize":
