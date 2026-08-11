@@ -41,7 +41,11 @@ AGENTS_DIR = _repo_relative("PMB_AGENTS_DIR", VAULT / "agents")
 # like "curated" meant every vault claimed the same dataset, so switching vaults collided with
 # the previous one and forced a wipe. Named this way, two vaults coexist and switching back
 # costs nothing.
-CURATED_DATASET = VAULT.name.lower()
+#
+# PMB_DATASET overrides it because the container cannot see the host's folder name: the vault is
+# bind-mounted at /vault, so every vault ingested that way would otherwise be called "vault" and
+# collide exactly as "curated" did. compose passes it, so the name follows the vault either way.
+CURATED_DATASET = (os.getenv("PMB_DATASET") or VAULT.name).lower()
 CURATED_PATHS = (VAULT / "rules", VAULT / "memory")
 
 # pgvector refuses to build an approximate index on a `vector` column wider than this, for
@@ -200,6 +204,17 @@ def configure() -> None:
             f"no vault at {VAULT} (expected a memory/ folder inside it).\n"
             "Leave PMB_VAULT blank for the default, or set it relative to this repository, "
             "for example ../docs."
+        )
+
+    # "vault" is the container's mount point, never a real vault's name. Reaching here means the
+    # vault was bind-mounted without PMB_DATASET, and the ingest would land in a dataset shared
+    # by every vault ever mounted, quietly overwriting the last one.
+    if CURATED_DATASET == "vault":
+        raise SystemExit(
+            "PMB_DATASET is not set. The vault is mounted at /vault, so the container cannot "
+            "tell which vault it is. Name it, for example:\n"
+            "  PMB_VAULT=../docs-standard PMB_DATASET=docs-standard "
+            "docker compose run --rm cognee-ingest"
         )
 
     missing = [

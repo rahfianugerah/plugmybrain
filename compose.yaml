@@ -97,6 +97,11 @@ services:
       # The vault is mounted at /vault below. Without this the app resolves PMB_VAULT from
       # .env, which is a host path, and finds nothing to ingest inside the container.
       PMB_VAULT: /vault
+      # Which is why the dataset name has to be passed separately: /vault carries no trace of
+      # the folder it came from, so without this every vault would be ingested as "vault" and
+      # overwrite the last one. Empty by default and checked in configure(), not with compose's
+      # `:?`, which is evaluated for every compose command and would break `up -d` as well.
+      PMB_DATASET: ${PMB_DATASET:-}
     mem_limit: 1200m
     volumes:
       - pmb-cognee:/data

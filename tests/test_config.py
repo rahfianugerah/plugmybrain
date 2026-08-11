@@ -118,3 +118,21 @@ def test_a_comma_separated_project_becomes_several_datasets():
     assert retrieve._names("curated") == ["curated"]
     with pytest.raises(SystemExit):
         retrieve._names(" , ")
+
+
+def test_the_container_must_name_the_vault_it_mounted(monkeypatch, tmp_path):
+    """/vault is the mount point, so the folder name is gone and PMB_DATASET has to supply it."""
+    import importlib
+
+    (tmp_path / "vault" / "memory").mkdir(parents=True)
+    monkeypatch.setenv("PMB_VAULT", str(tmp_path / "vault"))
+
+    monkeypatch.delenv("PMB_DATASET", raising=False)
+    assert importlib.reload(config).CURATED_DATASET == "vault"
+
+    monkeypatch.setenv("PMB_DATASET", "Docs-Standard")
+    assert importlib.reload(config).CURATED_DATASET == "docs-standard"
+
+    monkeypatch.delenv("PMB_VAULT")
+    monkeypatch.delenv("PMB_DATASET")
+    importlib.reload(config)
