@@ -31,8 +31,12 @@ Never read the whole vault to answer a question about this code. That is what th
 
 At `http://127.0.0.1:9000/mcp`, whether the stack runs here or on the VM behind the tunnel.
 
-**Read with `recall`.** Always pass `datasets`, so one project's memory cannot leak into
-another's answer. `curated` is the vault's own rules and memory.
+**Read with `recall`, always passing `datasets`.** `curated` is the vault's own rules and memory.
+
+**Known limitation: `datasets` does not actually isolate results right now.** All datasets share
+one vector collection, so a search scoped to one project can return another project's
+documents. Verified, not theoretical. Treat the dataset argument as intent, not as a boundary,
+and check the cited sources before trusting an answer.
 
 ```json
 {"query": "why is there no licence", "datasets": ["curated"],

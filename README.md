@@ -357,8 +357,15 @@ pmb eval                             # score and latency
 pmb serve                            # the HTTP API
 ```
 
-The dataset is the folder's own name, and it is required on every read. That is what keeps one
-project's memory out of another's answers. Nothing is ever scanned without an explicit path.
+The dataset is the folder's own name and is required on every read. Nothing is ever scanned
+without an explicit path.
+
+**Isolation is currently not enforced.** With `ENABLE_BACKEND_ACCESS_CONTROL=false`, which is
+what makes ingestion work at all here, cognee keeps every dataset in one shared vector
+collection and the `datasets` filter does not scope the search. A query against one project can
+return another's documents. Measured: a search of `agents`, a three-file dataset, returned a
+decision note that exists only in `curated`. Until this is resolved, the dataset argument
+records intent rather than enforcing a boundary.
 
 ## Configuration
 
