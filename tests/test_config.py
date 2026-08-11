@@ -106,3 +106,15 @@ def test_an_absolute_path_is_left_alone(monkeypatch):
 
 def test_slug_matches_the_kebab_case_filename_rule():
     assert promote.slug("Loader uses Polars, not pandas") == "loader-uses-polars-not-pandas"
+
+
+def test_a_comma_separated_project_becomes_several_datasets():
+    from plugmybrain import retrieve
+
+    assert retrieve._names("docs-standard, Maia-Erp-Backend ") == [
+        "docs-standard",
+        "maia-erp-backend",
+    ]
+    assert retrieve._names("curated") == ["curated"]
+    with pytest.raises(SystemExit):
+        retrieve._names(" , ")

@@ -141,7 +141,9 @@ def main(argv: list[str] | None = None) -> int:
 
     search_cmd = sub.add_parser("search", help="search one dataset")
     search_cmd.add_argument("query")
-    search_cmd.add_argument("--project", required=True, help="the dataset to search")
+    search_cmd.add_argument(
+        "--project", required=True, help="the dataset to search, or several as a,b,c"
+    )
     search_cmd.add_argument("--mode", default="chunks", choices=list(retrieve.MODES))
     search_cmd.add_argument("--top-k", type=int, default=15)
 
