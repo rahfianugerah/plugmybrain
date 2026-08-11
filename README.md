@@ -71,9 +71,13 @@ pmb sync --dry-run
 **6. Ingest the curated rules and memory.**
 
 ```bash
-pmb sync                                     # laptop, against whatever DB_HOST points at
-docker compose run --rm cognee-ingest          # on the VM, one-shot
+docker compose run --rm cognee-ingest
 ```
+
+**Always ingest in the container, on either host.** `pmb sync` run natively on Windows hangs on
+cognee's subprocess database workers, and a killed run stores host paths in Postgres that no
+container can resolve afterwards, which costs a `docker compose down -v`. Reading (`pmb search`,
+`pmb eval`) is fine natively; only ingestion must be containerised.
 
 Read the output. It reports documents ingested, files skipped by the exclusion list, and which
 vector index each table got with the row count that decided it. A skip is printed rather than
