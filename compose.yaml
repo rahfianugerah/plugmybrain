@@ -96,6 +96,9 @@ services:
       SYSTEM_ROOT_DIRECTORY: /data/cognee-system
       REQUIRE_AUTHENTICATION: "false"
       ENABLE_BACKEND_ACCESS_CONTROL: "false"
+      # The vault is mounted at /vault below. Without this the app resolves PMB_VAULT from
+      # .env, which is a host path, and finds nothing to ingest inside the container.
+      PMB_VAULT: /vault
     mem_limit: 1200m
     volumes:
       - pmb-cognee:/data

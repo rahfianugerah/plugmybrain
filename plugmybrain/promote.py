@@ -41,6 +41,55 @@ def _title_of(text: str, fallback: str) -> str:
     return match.group(1).strip() if match else fallback
 
 
+def write_note(
+    title: str,
+    body: str,
+    note_type: str = "session",
+    tags: list[str] | None = None,
+    force: bool = False,
+) -> PromoteReport:
+    """Write a memory note from an agent's own summary of what just happened.
+
+    This is how a coding session becomes memory. The agent already holds the context, so it
+    writes the summary; this only enforces the shape memory.rules.md requires, which is the
+    part that gets skipped when a note is typed by hand at the end of a long day.
+
+    Deliberately one note per session, not one per turn. The rule is "would the next session
+    waste time without this", and a note per generation buries the answer in noise.
+    """
+    if not title.strip():
+        raise SystemExit("a note needs a title that states the thing, not a topic")
+    if not body.strip():
+        raise SystemExit("a note with no body records nothing. Pipe the summary in on stdin.")
+
+    today = date.today().isoformat()
+    # Session notes are date-prefixed so the folder sorts chronologically, per note.template.md.
+    stem = slug(title)
+    filename = f"{today}-{stem}.md" if note_type == "session" else f"{stem}.md"
+    destination = config.memory_path(note_type, filename)
+    if destination.exists() and not force:
+        raise SystemExit(f"{destination} already exists. Use --force to overwrite it.")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        "---\n"
+        f"type: {note_type}\n"
+        f"created: {today}\n"
+        f"updated: {today}\n"
+        f"tags: [{', '.join(tags or ['session'])}]\n"
+        "status: current\n"
+        "---\n"
+        "\n"
+        f"# {title.strip()}\n"
+        "\n"
+        f"{body.strip()}\n",
+        encoding="utf-8",
+    )
+    return PromoteReport(
+        source=destination, destination=destination, title=title.strip(), note_type=note_type
+    )
+
+
 def promote(
     source: Path,
     note_type: str = "fact",

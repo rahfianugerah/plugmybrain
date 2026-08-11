@@ -88,7 +88,9 @@ def _print_ingest(report) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="pmb", description="Plug-and-play memory brain.")
+    parser = argparse.ArgumentParser(
+        prog="pmb", description="PlugMyBrain - Plug & play memory for your AI agents."
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     map_cmd = sub.add_parser("map", help="build a Graphify code map for a folder")
@@ -115,6 +117,14 @@ def main(argv: list[str] | None = None) -> int:
     export_cmd = sub.add_parser("export", help="render the knowledge graph as vault notes")
     export_cmd.add_argument("--project", required=True, help="the dataset to export")
     export_cmd.add_argument("--limit", type=int, default=500, help="most-connected nodes to write")
+
+    note_cmd = sub.add_parser(
+        "note", help="write a memory note; the body is read from stdin"
+    )
+    note_cmd.add_argument("title", help="states the thing, not the topic")
+    note_cmd.add_argument("--type", default="session", choices=list(config.NOTE_TYPES))
+    note_cmd.add_argument("--tags", help="comma-separated, defaults to the note type")
+    note_cmd.add_argument("--force", action="store_true", help="overwrite an existing note")
 
     promote_cmd = sub.add_parser(
         "promote", help="keep a generated note: copy it into the human-authored memory"
@@ -179,6 +189,21 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"dropped {report.dropped} less-connected node(s). Raise --limit to include them."
             )
+        return 0
+
+    if args.command == "note":
+        from plugmybrain import promote as promote_module
+
+        body = sys.stdin.read() if not sys.stdin.isatty() else ""
+        report = promote_module.write_note(
+            args.title,
+            body,
+            note_type=args.type,
+            tags=[t.strip() for t in args.tags.split(",")] if args.tags else None,
+            force=args.force,
+        )
+        print(f"wrote: {report.destination}")
+        print("Run `pmb sync` to fold it into the memory.")
         return 0
 
     if args.command == "promote":

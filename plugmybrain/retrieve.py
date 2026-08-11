@@ -27,43 +27,32 @@ async def search(query: str, dataset: str, mode: str = "chunks", top_k: int = 15
             top_k=top_k,
         )
 
-    # only_context skips the completion step, so this returns retrieved chunks and their
-    # sources rather than prose. That is the cheap path and the default.
+    # CHUNKS makes no completion call, so this is already the cheap path. Deliberately without
+    # only_context: that flag collapses the hits into one joined string and throws away the
+    # per-chunk metadata, so nothing downstream can say which file an answer came from.
     return await cognee.search(
         query_text=query,
         query_type=SearchType.CHUNKS,
         datasets=[dataset],
         top_k=top_k,
-        only_context=True,
     )
 
 
 def sources(results: list) -> list[str]:
-    """The source file names cited by a result set, in order, de-duplicated."""
+    """The files a result set came from, in order, de-duplicated.
+
+    Cognee returns `document_name` without an extension, so `commit.rules` becomes
+    `commit.rules.md`. The vault is markdown; anything already carrying a suffix is left alone.
+    """
     seen: list[str] = []
     for item in results:
-        for value in _walk(item):
-            name = value.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-            if name and name not in seen:
-                seen.append(name)
+        name = item.get("document_name") if isinstance(item, dict) else None
+        if not isinstance(name, str) or not name:
+            continue
+        # Not Path().suffix: `commit.rules` already has one (`.rules`), so a suffix test
+        # silently leaves the vault's own naming convention without its extension.
+        if not name.lower().endswith(tuple(config.DOCUMENT_SUFFIXES)):
+            name = f"{name}.md"
+        if name not in seen:
+            seen.append(name)
     return seen
-
-
-def _walk(value: object) -> list[str]:
-    """Every file-ish string inside a result, whatever shape cognee returned it in."""
-    found: list[str] = []
-    if isinstance(value, str):
-        if "." in value and ("/" in value or "\\" in value):
-            found.append(value)
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            if key in ("file_path", "source", "sourceFile", "name") and isinstance(item, str):
-                found.append(item)
-            else:
-                found.extend(_walk(item))
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            found.extend(_walk(item))
-    elif hasattr(value, "__dict__"):
-        found.extend(_walk(vars(value)))
-    return found

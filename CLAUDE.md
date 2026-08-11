@@ -43,6 +43,27 @@ another's answer. `curated` is the vault's own rules and memory.
 `GRAPH_COMPLETION` only when you actually want prose synthesised, because it costs an extra
 call on a path that runs on every question.
 
+## Writing What This Session Learned
+
+At the end of substantive work, write one note. You are holding the context, so you do the
+summarising; `pmb note` only enforces the shape.
+
+```bash
+pmb note "Voyage keys from Atlas need their own endpoint" --type session --tags plugmybrain,config <<'EOF'
+The 403 read as an invalid key and was a wrong address. An Atlas-issued key only authenticates
+against ai.mongodb.com; a dash.voyageai.com key only against api.voyageai.com.
+
+**Fix:** set EMBEDDING_ENDPOINT.
+**Lesson:** a 403 naming the key can still be an endpoint problem.
+EOF
+pmb sync
+```
+
+**One note per session, not one per turn.** The test from `memory.rules.md` is *"would the next
+session waste time without this?"* A note per generation buries the answer in noise, and a
+memory full of noise is a memory nobody reads. Nothing that the code or git history already
+says. Use `--type decision` when it records why something was chosen over something else.
+
 ## Two Things Not to Do
 
 - **Never call `remember` or `forget`.** They are exposed by the MCP server and they write
