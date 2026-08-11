@@ -37,7 +37,11 @@ VAULT_GENERATED = VAULT / "graph"
 AGENTS_DIR = _repo_relative("PMB_AGENTS_DIR", VAULT / "agents")
 
 # The human control plane: rules and memory. Wins on conflict with any project dataset.
-CURATED_DATASET = "curated"
+# Named after the vault, exactly as a project dataset is named after its folder. A fixed name
+# like "curated" meant every vault claimed the same dataset, so switching vaults collided with
+# the previous one and forced a wipe. Named this way, two vaults coexist and switching back
+# costs nothing.
+CURATED_DATASET = VAULT.name.lower()
 CURATED_PATHS = (VAULT / "rules", VAULT / "memory")
 
 # pgvector refuses to build an approximate index on a `vector` column wider than this, for

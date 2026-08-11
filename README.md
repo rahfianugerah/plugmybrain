@@ -245,6 +245,37 @@ The vault view is the one to reach for when you want the knowledge graph *next t
 that produced it, since Obsidian renders generated notes and human ones in one graph. The
 standalone HTML is the one to reach for when you just want to look.
 
+## One Stack or Several
+
+Measured, so the trade is a number rather than a preference: `cognee-mcp` holds **280 MiB** and
+Postgres **35 MiB**, so one stack is about 315 MiB.
+
+**One stack, several vaults and projects.** The default, and what to reach for first. Datasets
+are named after the folder they came from, so a personal standards vault, a company one, and
+any number of project datasets all coexist in one database. Nothing to start or stop when you
+switch context, and every dataset stays queryable at once. Isolation is enforced in
+`retrieve.py`, and is tested.
+
+```bash
+PMB_VAULT=../docs           docker compose run --rm cognee-ingest   # dataset: docs
+PMB_VAULT=../docs-standard  docker compose run --rm cognee-ingest   # dataset: docs-standard
+```
+
+**A stack per project.** Compose already does this with `-p`, no file changes needed. Each
+project gets its own containers, volumes and database, so isolation is at the database rather
+than enforced by this code.
+
+```bash
+MCP_PUBLISH_PORT=9001 DB_PUBLISH_PORT=15433 docker compose -p pmb-maia up -d
+```
+
+Register each one as its own MCP server, on its own port. The cost is 315 MiB per running
+stack and a context switch that means stopping one stack, starting another, and restarting the
+agent so it reconnects. On a 2 GiB VM, two stacks is the practical ceiling.
+
+Prefer one stack unless a project genuinely must not share a database with the others. Turning
+stacks off and on to save memory is a real strategy, but it buys isolation you already have.
+
 ## Moving to a Different Vault
 
 `PMB_VAULT` decides which vault is the brain. Switching it is not a one-line change, because

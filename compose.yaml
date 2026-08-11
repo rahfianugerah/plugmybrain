@@ -3,7 +3,6 @@
 services:
   postgres:
     image: pgvector/pgvector:0.8.6-pg18
-    container_name: pmb-pg
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${DB_NAME:-plugmybrain}
@@ -45,7 +44,6 @@ services:
 
   cognee-mcp:
     build: .
-    container_name: pmb-mcp
     restart: unless-stopped
     # Host, port and path are CLI flags on this binary, confirmed with --help. Passing them as
     # env vars looked right and was silently ignored. 0.0.0.0 inside the container is correct:
