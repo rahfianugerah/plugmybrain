@@ -1,7 +1,7 @@
 # The laptop side of the link to the VM. One SSH session carries both ports and restarts if it
 # drops. Uses gcloud and the built-in Windows OpenSSH client; nothing new is installed.
 #
-#   8000 -> the Cognee MCP server, what Claude Code and Codex connect to
+#   9000 -> the Cognee MCP server, what Claude Code and Codex connect to
 #  15432 -> Postgres, what `pmb export` and `pmb sync` use
 #
 # 15432 rather than 5432 on purpose: the laptop may run its own Postgres on 5432, and a forward
@@ -26,11 +26,11 @@ $sshArgs = @(
     "-o", "ServerAliveInterval=30",
     "-o", "ServerAliveCountMax=3",
     "-o", "ExitOnForwardFailure=yes",
-    "-L", "8000:127.0.0.1:8000",
+    "-L", "9000:127.0.0.1:8000",
     "-L", "15432:127.0.0.1:5432"
 )
 
-Write-Output "tunnel to $Vm ($Zone): 8000 -> MCP, 15432 -> postgres. Ctrl+C to stop."
+Write-Output "tunnel to $Vm ($Zone): 9000 -> MCP, 15432 -> postgres. Ctrl+C to stop."
 
 while ($true) {
     gcloud compute ssh $Vm --tunnel-through-iap --zone $Zone @projectArg -- @sshArgs

@@ -6,7 +6,6 @@
 ![Cognee](https://img.shields.io/badge/Cognee-1.4.2-0F766E)
 ![Graphify](https://img.shields.io/badge/Graphify-0.9.38-B45309)
 ![Status](https://img.shields.io/badge/Status-WIP-D29922)
-![License](https://img.shields.io/badge/License-MIT-750014)
 
 A plug-and-play memory for any AI model. Point it at a folder and it produces two things: a
 code map an agent reads instead of grepping the tree, and a knowledge graph over the folder's
@@ -150,7 +149,7 @@ gcloud compute firewall-rules create pmb-iap-ssh --project $PROJECT \
   --allow tcp:22 --source-ranges 35.235.240.0/20
 ```
 
-There is deliberately no rule for 5432 or 8000. Both bind to the VM's loopback and are reached
+There is deliberately no rule for 5432 or 9000. Both bind to the VM's loopback and are reached
 only through the tunnel.
 
 ### 2. Provision the host
@@ -177,7 +176,7 @@ $env:PMB_VM="plugmybrain"; $env:PMB_ZONE="asia-southeast1-a"; $env:PMB_PROJECT="
 .\scripts\tunnel.ps1
 ```
 
-One session carries both ports and reconnects if it drops: `8000` for the MCP server and
+One session carries both ports and reconnects if it drops: `9000` for the MCP server and
 `15432` for Postgres. Set `DB_PORT=15432` in the laptop's `.env`. The odd port is deliberate:
 a dev Postgres already holding 5432 would otherwise make the forward fail in a way that reads
 as a database problem.
@@ -269,7 +268,7 @@ write it.
 ## Agent Wiring
 
 Both Claude Code and Codex reach the brain as a remote MCP server at
-`http://127.0.0.1:8000/mcp`. **The same URL works in both setups**, which is the point:
+`http://127.0.0.1:9000/mcp`. **The same URL works in both setups**, which is the point:
 
 - **Stack running locally.** `docker compose up -d` publishes the MCP server on loopback. No
   tunnel, no VM, nothing else to start.
@@ -279,7 +278,7 @@ Both Claude Code and Codex reach the brain as a remote MCP server at
 Neither agent runs a cognee process, and neither pays a cold start.
 
 ```powershell
-claude mcp add --transport http plugmybrain http://127.0.0.1:8000/mcp --scope user
+claude mcp add --transport http plugmybrain http://127.0.0.1:9000/mcp --scope user
 ```
 
 For Codex, add this to `~/.codex/config.toml` by hand. `codex mcp add` only registers stdio
@@ -287,7 +286,7 @@ servers, so the CLI cannot do this one:
 
 ```toml
 [mcp_servers.plugmybrain]
-url = "http://127.0.0.1:8000/mcp"
+url = "http://127.0.0.1:9000/mcp"
 startup_timeout_sec = 60
 ```
 
@@ -448,4 +447,6 @@ Written down because [[deploy.rules.md]] and [[secret.rules.md]] require a devia
 
 ## License
 
-MIT
+None. This is a personal project and carries no licence, which means default copyright: all
+rights reserved, and nobody else has permission to use, copy or modify it. That is a deliberate
+choice for now, not an oversight. Adding one later is a one-file change.

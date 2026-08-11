@@ -30,7 +30,7 @@ Never read the whole vault to answer a question about this code. That is what th
 ## The PlugMyBrain MCP Server
 
 The `plugmybrain` MCP server answers document questions over the knowledge graph, at
-`http://127.0.0.1:8000/mcp` whether the stack runs here or on the VM behind the tunnel.
+`http://127.0.0.1:9000/mcp` whether the stack runs here or on the VM behind the tunnel.
 **Always pass the dataset**; it is required on every read so one project's memory cannot leak
 into another's answer. `curated` is the vault's own rules and memory.
 

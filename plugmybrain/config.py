@@ -171,6 +171,19 @@ def configure() -> None:
     os.environ.setdefault("GRAPH_DATABASE_PROVIDER", "postgres")
     os.environ.setdefault("TELEMETRY_DISABLED", "1")
 
+    # cognee 1.x turns authentication and multi-tenancy on by default. With access control on it
+    # routes every dataset through per-user databases, and `add` dies in _get_vector_db_info on
+    # a connection nothing is listening for. This is one person's brain, so both are off, and
+    # they are set here rather than in compose so the CLI and the container agree.
+    os.environ.setdefault("REQUIRE_AUTHENTICATION", "false")
+    os.environ.setdefault("ENABLE_BACKEND_ACCESS_CONTROL", "false")
+
+    # cognee runs a 30s pre-flight reachability test against the model endpoints. It times out
+    # here even when the providers answer in milliseconds by curl, so it fails a setup that
+    # works. Skipped: a genuinely bad key then fails at the real call, with the provider's own
+    # error, which says more than "connection test timed out" ever did.
+    os.environ.setdefault("COGNEE_SKIP_CONNECTION_TEST", "true")
+
     # A wrong PMB_VAULT is silent otherwise: ingestion finds no documents and reports an empty
     # corpus, which reads as "the vault is empty" rather than "the path is wrong".
     if not (VAULT / "memory").is_dir():
