@@ -52,8 +52,8 @@ def _unpack_edge(edge: object) -> tuple[str, str, str]:
     raise SystemExit(f"unrecognised edge shape from the graph engine: {type(edge).__name__}")
 
 
-async def export(target: Path, limit: int = DEFAULT_LIMIT) -> ExportReport:
-    """Render the knowledge graph as linked markdown inside the folder's graph/ area.
+async def export(name: str, limit: int = DEFAULT_LIMIT) -> ExportReport:
+    """Render the knowledge graph as linked markdown in the vault, under this brain's name.
 
     Generated notes link to each other, never sideways into a human-authored note. A rebuild
     must not be able to change the part of the graph a person wrote.
@@ -66,11 +66,11 @@ async def export(target: Path, limit: int = DEFAULT_LIMIT) -> ExportReport:
     labels = dict(_unpack_node(node) for node in nodes)
     neighbours: dict[str, list[tuple[str, str]]] = {node_id: [] for node_id in labels}
     for edge in edges:
-        source, target_id, relationship = _unpack_edge(edge)
-        if source in neighbours and target_id in labels:
-            neighbours[source].append((relationship, target_id))
+        source, node_id, relationship = _unpack_edge(edge)
+        if source in neighbours and node_id in labels:
+            neighbours[source].append((relationship, node_id))
 
-    directory = config.generated_path(target, "kg")
+    directory = config.generated_path("kg", name)
     directory.mkdir(parents=True, exist_ok=True)
 
     chosen = sorted(labels, key=lambda node_id: (-len(neighbours[node_id]), labels[node_id]))[

@@ -42,23 +42,21 @@ services:
       timeout: 5s
       retries: 10
 
-  cognee-mcp:
+  mcp:
     build: .
     restart: unless-stopped
-    # Host, port and path are CLI flags on this binary, confirmed with --help. Passing them as
-    # env vars looked right and was silently ignored. 0.0.0.0 inside the container is correct:
-    # the publish below scopes it to the VM's loopback, so the tunnel is still the only way in.
-    command:
-      ["cognee-mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8000",
-       "--path", "/mcp"]
+    # PlugMyBrain's own server, not cognee-mcp. cognee-mcp exposes eleven tools: three write
+    # into the index behind the markdown's back, three open a browser UI, four dump JSON that
+    # `pmb list` already prints. Every one of them costs an agent context on every single turn.
+    # This serves two, and neither can write. See plugmybrain/server.py.
+    #
+    # 0.0.0.0 inside the container is correct: the publish below scopes it to loopback, so on a
+    # VM the tunnel is still the only way in.
+    command: ["python", "-m", "plugmybrain.server"]
     env_file: .env
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"
-      # cognee-mcp 0.5.5 ships src/__init__.py doing `from server import main`, a bare
-      # top-level import of a module that lives inside its own package. It only resolves with
-      # src/ on sys.path. Scoped to this service so it cannot shadow anything in pmb.
-      PYTHONPATH: /usr/local/lib/python3.13/site-packages/src
       # Without these cognee writes its system state into site-packages, which a container
       # restart throws away. Postgres holds the real data; this is the rest.
       DATA_ROOT_DIRECTORY: /data/cognee
@@ -85,13 +83,14 @@ services:
     # alongside serving. On 2 GiB that is the difference between slow and OOM-killed, and a
     # file that enforces it beats remembering to.
     #
-    # No folder is mounted here, because the folder is chosen per run and its NAME is the memory
-    # it lands in. Mount it under /w so the basename survives the trip into the container:
+    # The folder to digest is chosen per run and its NAME is the memory it lands in, so it is
+    # mounted under /w where the basename survives the trip into the container:
     #
-    #   docker compose run --rm -v C:/Users/Rahfi/docs:/w/docs pmb digest /w/docs
+    #   docker compose run --rm -v C:/Users/Rahfi/maharum:/w/maharum pmb digest /w/maharum
     #
     # A fixed mount point would erase the name, and every folder would be digested into one
-    # shared memory that overwrites the last.
+    # shared memory that overwrites the last. Mount it read-only if you like: nothing is ever
+    # written to a digested folder.
     profiles: ["cli"]
     entrypoint: ["pmb"]
     env_file: .env
@@ -102,9 +101,14 @@ services:
       SYSTEM_ROOT_DIRECTORY: /data/cognee-system
       REQUIRE_AUTHENTICATION: "false"
       ENABLE_BACKEND_ACCESS_CONTROL: "false"
+      # Where every generated note lands, for every brain. Mounted below.
+      PMB_DOCS: /docs
     mem_limit: 1200m
     volumes:
       - pmb-cognee:/data
+      # The one Obsidian vault. Read-write, because this is the only thing digest writes to.
+      # Relative to this file, so the sibling `docs` checkout is the default.
+      - ${PMB_DOCS:-../docs}:/docs
     depends_on:
       postgres:
         condition: service_healthy

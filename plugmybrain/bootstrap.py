@@ -46,13 +46,16 @@ a direct write is gone at the next rebuild with nothing to warn you.
 
 _GRAPH_README = """# Graph
 
-Machine-generated. `pmb digest` writes it and `pmb reset` deletes it, so editing anything below
-this file is wasted work.
+Every brain on this machine generates into here, one folder per brain. `pmb digest` writes it
+and `pmb reset` deletes it, so editing anything below this file is wasted work.
 
 | Folder | Holds |
 | :- | :- |
-| `code/` | The Graphify code map: hubs, connections, and the questions worth asking |
-| `kg/` | The Cognee knowledge graph as `[[wikilink]]` notes, for the Obsidian graph view |
+| `code/<brain>/` | The Graphify code map: hubs, connections, and the questions worth asking |
+| `kg/<brain>/` | The Cognee knowledge graph as `[[wikilink]]` notes, for the graph view |
+
+It lands here rather than inside each project so no repository grows a `graph/` nobody asked
+for, and so one vault shows everything. A digested folder is only ever read.
 
 This README is not generated and is not deleted by a reset.
 
@@ -98,16 +101,24 @@ def _write(path: Path, text: str, created: list[Path]) -> None:
 
 
 def _scaffold_brain(target: Path, report: InitReport) -> None:
-    """Give a folder the shape a brain needs: somewhere to write, and somewhere to generate."""
+    """Give a brain somewhere to write: `memory/`, and a folder per kind of note.
+
+    Only `memory/`. Nothing generated goes in here; that all lands in the vault, which is why a
+    digested folder is only ever read.
+    """
     for note_type in NOTE_TYPES:
         (target / config.HUMAN / note_type).mkdir(parents=True, exist_ok=True)
         _write(target / config.HUMAN / note_type / ".gitkeep", "", report.created)
     _write(target / config.HUMAN / "README.md", _MEMORY_README, report.created)
-    _write(target / config.GENERATED / "README.md", _GRAPH_README, report.created)
 
-    # The generated subfolders are rebuilt from the markdown, so committing them is committing
-    # a cache. Appended rather than rewritten: this file is the user's.
-    gitignore = target / ".gitignore"
+
+def _scaffold_vault(report: InitReport) -> None:
+    """Make sure the one vault every brain generates into exists and ignores its own output."""
+    _write(config.DOCS / config.GENERATED / "README.md", _GRAPH_README, report.created)
+
+    # The generated subfolders are rebuilt from the markdown, so committing them is committing a
+    # cache. Appended rather than rewritten: this file is the user's.
+    gitignore = config.DOCS / ".gitignore"
     existing = gitignore.read_text(encoding="utf-8") if gitignore.is_file() else ""
     missing = [line for line in _GITIGNORE if line not in existing]
     if missing:
@@ -165,24 +176,28 @@ def _wire_codex(report: InitReport) -> None:
 
 
 def _install_command(report: InitReport) -> None:
-    """Write the `/pmb` slash command for both agents, with this checkout's path substituted.
+    """Write every slash command into both agents, with this machine's paths substituted.
 
     Substituted rather than left as an environment variable: the whole point of `init` is that
     nothing is left for you to set by hand afterwards.
     """
-    template = config.REPO_ROOT / "agents" / "pmb.md"
-    if not template.is_file():
-        report.warnings.append(f"no command template at {template}, so /pmb was not installed")
+    templates = sorted((config.REPO_ROOT / "agents").glob("*.md"))
+    if not templates:
+        report.warnings.append(
+            f"no command templates in {config.REPO_ROOT / 'agents'}, so nothing was installed"
+        )
         return
-    text = (
-        template.read_text(encoding="utf-8")
-        .replace("{{PMB_HOME}}", config.REPO_ROOT.as_posix())
-        .replace("{{MCP_URL}}", mcp_url())
-    )
     for directory in (Path.home() / ".claude" / "commands", Path.home() / ".codex" / "prompts"):
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "pmb.md").write_text(text, encoding="utf-8")
-        report.wired.append(f"/pmb -> {directory / 'pmb.md'}")
+        for template in templates:
+            text = (
+                template.read_text(encoding="utf-8")
+                .replace("{{PMB_HOME}}", config.REPO_ROOT.as_posix())
+                .replace("{{PMB_DOCS}}", config.DOCS.as_posix())
+                .replace("{{MCP_URL}}", mcp_url())
+            )
+            (directory / template.name).write_text(text, encoding="utf-8")
+        report.wired.append(f"{', '.join('/' + t.stem for t in templates)} -> {directory}")
 
 
 def init(target: Path, role: str, wire: bool = True) -> InitReport:
@@ -211,6 +226,7 @@ def init(target: Path, role: str, wire: bool = True) -> InitReport:
 
     if role == "brain":
         _scaffold_brain(target, report)
+    _scaffold_vault(report)
 
     if wire:
         _wire_claude(Path.home(), report)

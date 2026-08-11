@@ -55,20 +55,17 @@ def _on_disk(target: Path) -> tuple[int, int, int, int]:
     """
     included, skipped = config.collect_documents(target)
     human = target / config.HUMAN
-    generated = target / config.GENERATED
-    # graph/ is excluded so a digest never eats its own output, but that is by design rather
-    # than a refused secret. Counting it under "skipped" would report the tool's own notes as
-    # something suspicious it declined to read.
-    refused = [p for p in skipped if not p.is_relative_to(generated)]
-    # Only the machine-written subfolders. A README sitting in graph/ is hand-written.
+    name = config.namespace(target)
+    # Counted in the vault, not here: a digested folder is only ever read, so nothing this tool
+    # generated is inside it. Nothing below is a write path, and that is the point.
     written = sum(
-        len(list((generated / sub).rglob("*.md")))
+        len(list(directory.rglob("*.md")))
         for sub in config.GENERATED_SUBDIRS
-        if (generated / sub).is_dir()
+        if (directory := config.DOCS / config.GENERATED / sub / name).is_dir()
     )
     return (
         len(included),
-        len(refused),
+        len(skipped),
         len(list(human.rglob("*.md"))) if human.is_dir() else 0,
         written,
     )
@@ -81,19 +78,26 @@ async def status(target: Path, scan: bool = True) -> Status:
     counting every child's, and the sum of things that were digested separately is not a number
     that means anything.
     """
-    config.configure(models=False)
+    config.configure(chat=False)
 
     target = target.resolve()
     name = config.namespace(target)
     markdown, skipped, human, generated = _on_disk(target) if scan else (0, 0, 0, 0)
 
+    import asyncpg
+
     connection = await _pool()
     try:
-        rows = await connection.fetch(
-            "SELECT ds.name, count(dd.data_id) AS documents, min(ds.created_at) AS created "
-            "FROM datasets ds LEFT JOIN dataset_data dd ON dd.dataset_id = ds.id "
-            "GROUP BY ds.name ORDER BY ds.name"
-        )
+        try:
+            rows = await connection.fetch(
+                "SELECT ds.name, count(dd.data_id) AS documents, min(ds.created_at) AS created "
+                "FROM datasets ds LEFT JOIN dataset_data dd ON dd.dataset_id = ds.id "
+                "GROUP BY ds.name ORDER BY ds.name"
+            )
+        except asyncpg.exceptions.UndefinedTableError:
+            # Cognee creates its schema on the first `add`, so before any digest these tables
+            # do not exist. That is an empty brain, not a broken one.
+            rows = []
         database = str(config.db_connect_kwargs()["database"])
         size = await connection.fetchval("SELECT pg_size_pretty(pg_database_size($1))", database)
 
@@ -131,13 +135,12 @@ async def reset(target: Path, everything: bool = False) -> ResetReport:
     """Throw away the derived memory. Never the markdown.
 
     `memory/` is what a person wrote and `pmb digest` can rebuild everything else from it, so
-    this deletes the database rows and the generated `graph/` folder and stops there.
+    this deletes the database rows and this brain's generated notes in the vault, and stops.
     """
-    config.configure()
+    config.configure(chat=False)
     import cognee
 
     target = target.resolve()
-    generated = target / config.GENERATED
     name = config.namespace(target)
 
     if everything:
@@ -164,12 +167,14 @@ async def reset(target: Path, everything: bool = False) -> ResetReport:
             await cognee.delete(data_id=row["data_id"], dataset_id=row["dataset_id"], mode="hard")
         documents = len(rows)
 
-    # The subfolders, never `graph/` itself: a hand-written README lives there and is committed.
+    # This brain's folder under each kind, never the kind folder itself: another brain's notes
+    # live beside it, and `graph/README.md` above it is hand-written and committed.
     removed = []
     for sub in config.GENERATED_SUBDIRS:
-        if (generated / sub).is_dir():
-            shutil.rmtree(generated / sub)
-            removed.append(generated / sub)
+        directory = config.DOCS / config.GENERATED / sub / name
+        if directory.is_dir():
+            shutil.rmtree(directory)
+            removed.append(directory)
 
     return ResetReport(
         scope="everything" if everything else name,

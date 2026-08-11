@@ -19,7 +19,7 @@ def _graphify() -> str | None:
 
 
 def map_code(target: Path) -> Path | None:
-    """Build a Graphify code map and copy its report into the folder's graph/ area.
+    """Build a Graphify code map and copy its report into the vault, under this brain's name.
 
     Returns None when there is nothing to map, which a folder of pure markdown always is.
     `--code-only` keeps every file on the local tree-sitter path: no API key, nothing uploaded.
@@ -28,7 +28,8 @@ def map_code(target: Path) -> Path | None:
     if exe is None:
         return None
 
-    out_parent = config.GRAPH_DIR / config.namespace(target)
+    name = config.namespace(target)
+    out_parent = config.GRAPH_DIR / name
     out_parent.mkdir(parents=True, exist_ok=True)
 
     # extract is incremental on its own manifest, so a re-run only re-reads what changed.
@@ -44,7 +45,7 @@ def map_code(target: Path) -> Path | None:
     if not report.is_file():
         return None
 
-    destination = config.generated_path(target, "code", "GRAPH_REPORT.md")
+    destination = config.generated_path("code", name, "GRAPH_REPORT.md")
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(report, destination)
     return destination
@@ -105,11 +106,11 @@ async def digest_one(target: Path, dry_run: bool = False) -> None:
     code = map_code(target)
     print(f"code map: {code if code else 'none, no source files found'}")
 
-    graph = await export_module.export(target)
+    graph = await export_module.export(name)
     print(f"graph:    {graph.written} of {graph.total} note(s) in {graph.directory}")
     if graph.dropped:
         print(f"          {graph.dropped} less-connected node(s) dropped")
-    print(f"\nOpen {target} in Obsidian to see it.")
+    print(f"\nOpen {config.DOCS} in Obsidian to see it.")
 
 
 def _print_folder(status) -> None:
@@ -242,8 +243,9 @@ def main(argv: list[str] | None = None) -> int:
         # Confirmed rather than assumed: this is the only destructive command, and a digest of a
         # large folder costs real money to rebuild even though nothing is truly lost.
         if not args.yes:
-            print(f"About to delete {scope}, and the generated graph/ under each.")
-            print("Every memory/ folder and every other markdown file are left alone.")
+            print(f"About to delete {scope}, and their generated notes under")
+            print(f"{config.DOCS / config.GENERATED}.")
+            print("Every folder that was digested is untouched: nothing was ever written to it.")
             if input("Type yes to continue: ").strip().lower() != "yes":
                 print("Nothing was deleted.")
                 return 1

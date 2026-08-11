@@ -11,15 +11,19 @@ def test_namespace_is_the_lowercased_directory_name():
     assert config.namespace(Path("C:/some/Path/My-Project")) == "my-project"
 
 
-def test_generated_path_stays_inside_the_folders_generated_area(tmp_path):
-    path = config.generated_path(tmp_path, "code", "GRAPH_REPORT.md")
-    assert path.is_relative_to((tmp_path / config.GENERATED).resolve())
+def test_generated_path_lands_in_the_vault_under_the_brains_name():
+    path = config.generated_path("code", "docs-standard", "GRAPH_REPORT.md")
+    assert path.is_relative_to((config.DOCS / config.GENERATED / "code").resolve())
+    assert path.name == "GRAPH_REPORT.md"
 
 
-def test_generated_path_refuses_to_escape(tmp_path):
-    # The one that matters: `memory/` is human-authored, and a rebuild must not reach it.
+def test_generated_path_refuses_to_escape():
+    # The one that matters: `memory/` is human-authored and sits in the same vault, so a
+    # rebuild that could climb out of graph/ could overwrite a note somebody wrote.
     with pytest.raises(ValueError):
-        config.generated_path(tmp_path, "..", "memory", "stolen.md")
+        config.generated_path("kg", "../../memory", "stolen.md")
+    with pytest.raises(ValueError):
+        config.generated_path("memory", "anything")
 
 
 @pytest.mark.parametrize(
@@ -35,8 +39,18 @@ def test_secret_directories_are_excluded(directory):
     assert config.is_excluded(Path("/project") / directory / "notes.md")
 
 
-def test_the_generated_area_is_never_digested_back_into_itself():
+def test_the_generated_area_is_never_digested_back_into_itself(tmp_path):
     assert config.is_excluded(Path("/project") / config.GENERATED / "kg" / "node.md")
+
+    # And it is not reported as a refused secret either. The vault holds both the notes to
+    # digest and the notes a digest produced, so "skipped" would otherwise accuse the tool's
+    # own output of looking like a leaked key.
+    (tmp_path / config.GENERATED / "kg").mkdir(parents=True)
+    (tmp_path / config.GENERATED / "kg" / "node.md").write_text("#", encoding="utf-8")
+    (tmp_path / "real.md").write_text("#", encoding="utf-8")
+    included, skipped = config.collect_documents(tmp_path)
+    assert [p.name for p in included] == ["real.md"]
+    assert skipped == []
 
 
 def test_ordinary_documents_are_not_excluded():
@@ -57,19 +71,22 @@ def test_collect_documents_takes_markdown_and_reports_the_secrets_it_refused(tmp
     assert {p.name for p in skipped} == {".env", "leak.md"}
 
 
-def test_the_counts_list_reports_separate_human_from_generated(tmp_path):
-    (tmp_path / "README.md").write_text("#", encoding="utf-8")
-    (tmp_path / config.HUMAN).mkdir()
-    (tmp_path / config.HUMAN / "a-decision.md").write_text("#", encoding="utf-8")
-    (tmp_path / config.GENERATED / "kg").mkdir(parents=True)
-    (tmp_path / config.GENERATED / "kg" / "node.md").write_text("#", encoding="utf-8")
+def test_the_counts_read_generated_notes_from_the_vault(tmp_path, monkeypatch):
+    project = tmp_path / "some-service"
+    (project / config.HUMAN).mkdir(parents=True)
+    (project / "README.md").write_text("#", encoding="utf-8")
+    (project / config.HUMAN / "a-decision.md").write_text("#", encoding="utf-8")
 
-    markdown, skipped, human, generated = manage._on_disk(tmp_path)
+    vault = tmp_path / "vault"
+    (vault / config.GENERATED / "kg" / "some-service").mkdir(parents=True)
+    (vault / config.GENERATED / "kg" / "some-service" / "node.md").write_text("#", "utf-8")
+    monkeypatch.setattr(config, "DOCS", vault)
 
-    # The generated note is counted, but never as something to digest: re-digesting the model's
-    # own output is how a graph starts citing itself.
-    assert (markdown, human, generated) == (2, 1, 1)
-    assert skipped == 0
+    markdown, skipped, human, generated = manage._on_disk(project)
+
+    # Two markdown in the folder, and the generated note counted from the vault rather than
+    # from the folder, which is never written to.
+    assert (markdown, human, generated, skipped) == (2, 1, 1, 0)
 
 
 def test_dimension_guard_matches_the_pgvector_index_ceiling():
@@ -97,25 +114,13 @@ def test_slug_is_stable_so_a_re_digest_overwrites_rather_than_duplicates():
     assert export.slug("Loader uses Polars, not pandas") == "loader-uses-polars-not-pandas"
 
 
-def test_reset_leaves_the_hand_written_readme_in_graph(tmp_path):
-    """graph/ holds a committed README explaining the folder; only its subfolders are ours."""
-    generated = tmp_path / config.GENERATED
-    (generated / "kg").mkdir(parents=True)
-    (generated / "kg" / "node.md").write_text("#", encoding="utf-8")
-    (generated / "README.md").write_text("# Graph", encoding="utf-8")
-
-    markdown, _, _, written = manage._on_disk(tmp_path)
-    # The README is generated-area markdown but not machine-written, so it is neither digested
-    # nor counted as something a digest would rebuild.
-    assert (markdown, written) == (0, 1)
-
-
-def test_a_root_digests_its_brain_before_anything_else(tmp_path):
+def test_a_root_digests_its_brain_before_anything_else(tmp_path, monkeypatch):
     """Everything else is read against the rules, so a half-finished run still leaves a brain."""
     for name in ("zeta-service", "the-rules", "alpha-service"):
         (tmp_path / name).mkdir()
         (tmp_path / name / "README.md").write_text("#", encoding="utf-8")
     (tmp_path / "empty").mkdir()
+    monkeypatch.setattr(config, "DOCS", tmp_path / "vault")
     bootstrap.init(tmp_path / "the-rules", "brain", wire=False)
 
     assert [p.name for p in bootstrap.children(tmp_path)] == [
@@ -125,22 +130,28 @@ def test_a_root_digests_its_brain_before_anything_else(tmp_path):
     ]
 
 
-def test_a_folder_will_not_silently_change_role(tmp_path):
+def test_a_folder_will_not_silently_change_role(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DOCS", tmp_path / "vault")
     bootstrap.init(tmp_path, "brain", wire=False)
     assert bootstrap.role_of(tmp_path) == "brain"
     with pytest.raises(SystemExit):
         bootstrap.init(tmp_path, "root", wire=False)
 
 
-def test_init_scaffolds_a_brain_without_overwriting_what_is_there(tmp_path):
-    (tmp_path / config.HUMAN).mkdir()
-    (tmp_path / config.HUMAN / "README.md").write_text("mine", encoding="utf-8")
-    (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+def test_init_scaffolds_a_brain_without_overwriting_what_is_there(tmp_path, monkeypatch):
+    brain, vault = tmp_path / "brain", tmp_path / "vault"
+    (brain / config.HUMAN).mkdir(parents=True)
+    (brain / config.HUMAN / "README.md").write_text("mine", encoding="utf-8")
+    vault.mkdir()
+    (vault / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    monkeypatch.setattr(config, "DOCS", vault)
 
-    bootstrap.init(tmp_path, "brain", wire=False)
+    bootstrap.init(brain, "brain", wire=False)
 
-    assert (tmp_path / config.HUMAN / "README.md").read_text(encoding="utf-8") == "mine"
+    assert (brain / config.HUMAN / "README.md").read_text(encoding="utf-8") == "mine"
     for note_type in bootstrap.NOTE_TYPES:
-        assert (tmp_path / config.HUMAN / note_type).is_dir()
-    ignored = (tmp_path / ".gitignore").read_text(encoding="utf-8")
+        assert (brain / config.HUMAN / note_type).is_dir()
+    # Nothing generated is written into the brain: a digested folder is only ever read.
+    assert not (brain / config.GENERATED).exists()
+    ignored = (vault / ".gitignore").read_text(encoding="utf-8")
     assert "node_modules/" in ignored and "graph/kg/" in ignored

@@ -7,16 +7,16 @@
 ![Obsidian](https://img.shields.io/badge/Obsidian-Required-7C3AED?logo=obsidian&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-WIP-D29922)
 
-A plug-and-play memory for any AI model. Point it at a folder of markdown and that folder
-becomes a brain: a knowledge graph your agents query over MCP, a code map they read instead of
-grepping, and more markdown written back so Obsidian can show you the whole thing.
+A plug-and-play memory for coding agents. Point it at a folder of markdown and that folder
+becomes a brain: a knowledge graph the agent queries over MCP, a code map it reads instead of
+grepping, and more markdown written into your vault so you can see the whole thing.
 
 It exists because an agent with no memory relearns the same context every session and pays for
 that in tokens every time.
 
-**Obsidian is required.** It is the viewer, and there is no other. Everything this tool
-produces is markdown in the folder you pointed it at, so the folder opens as a vault and the
-generated graph sits next to the notes that produced it.
+**Obsidian is required.** It is the viewer, and there is no other. Everything generated is
+markdown in one vault, so the graph a model built sits next to the notes a person wrote and
+renders in the same graph view.
 
 ## Four Commands
 
@@ -26,16 +26,25 @@ memory is called.
 | Command | Does |
 | :- | :- |
 | `pmb init root\|brain` | Gives a folder its role, and wires Claude Code and Codex to the brain. Nothing else to set up by hand |
-| `pmb digest` | Reads every markdown file into Cognee, builds the Graphify code map, and writes the knowledge graph back into `graph/` as linked markdown |
-| `pmb reset` | Deletes that memory from the database and the generated `graph/code/` and `graph/kg/`. **Every markdown file survives**, so a digest rebuilds it |
+| `pmb digest` | Reads every markdown file into Cognee, builds the Graphify code map, and writes the knowledge graph into the vault as linked markdown |
+| `pmb reset` | Deletes that memory from the database and its generated notes. **Every markdown file survives**, so a digest rebuilds it |
 | `pmb list` | What the database holds, every memory in it, and how the folder's markdown count compares with what was actually digested |
 
 Each takes an optional folder and defaults to the current one. `pmb digest --dry-run` estimates
 the cost before spending anything.
 
-**Asking questions needs no command.** The memory is connected to Claude Code and Codex as an
-MCP server, so a question is answered by the agent calling it directly. In an agent write
-`/pmb digest`; in a terminal or a chatbot it is just `pmb digest`.
+**Asking questions needs no command.** The memory is connected as an MCP server, so a question
+is answered by the agent calling it directly. In an agent write `/pmb digest`; in a terminal it
+is just `pmb digest`.
+
+There is a fifth thing, and it is not a command: **`/pmb-map <brain>`** tells the current chat
+session to read from a different brain from here on. It changes nothing on disk and restarts
+nothing; one stack holds every memory, and this is which one gets asked.
+
+**This is built for coding agents.** Claude Code, Codex, opencode, and anything else speaking
+MCP. It is not a chatbot back end, and the chat model it uses exists for one job: turning
+markdown into a graph, once, when you digest. Reading never calls a model, so an agent asking a
+question costs nothing.
 
 ## Two Roles
 
@@ -45,7 +54,7 @@ folder, and it is committed, so a clone on another machine already knows the lay
 
 | Role | Is | Digested as |
 | :- | :- | :- |
-| `brain` | The rules and memory folder, like `docs/` or `docs-standard/` | One memory. Scaffolded with `memory/` and `graph/` if they are missing |
+| `brain` | The rules and memory folder, like `docs/` or `docs-standard/` | One memory. Scaffolded with `memory/` if it is missing |
 | `root` | A parent holding many projects, like `maharum/` | Every child that has markdown, **brain first**, each its own memory |
 
 Brain first because everything else is read against the rules, so a run that stops halfway
@@ -60,20 +69,25 @@ cd C:/Users/you/docs            &&  pmb init brain .       # a standalone brain
 A folder needs neither role. `pmb digest some-project` works on anything with markdown in it;
 the roles only exist so a parent can be digested in one go.
 
-## Folder Layout
+## Nothing Is Written Into a Digested Folder
 
-Any folder works. These two names are the only ones the tool treats specially:
+A folder you digest is only ever **read**. Everything generated lands in one Obsidian vault,
+namespaced per brain:
 
 ```text
-your-folder/
-  .pmb         one word: root or brain. Written by init, committed
-  memory/      human-authored. Never touched by reset. This is the memory
-  graph/       generated. code/ and kg/ are rebuilt by digest and deleted by reset
-  ...          every other .md file, digested as-is
+your-folder/                      the vault (PMB_DOCS, default ../docs)
+  .pmb      root or brain           graph/
+  memory/   human-authored            README.md          yours, survives a reset
+  ...       every other .md           code/<brain>/      the Graphify map
+                                      kg/<brain>/        the Cognee knowledge graph
 ```
 
-`graph/README.md` is yours and survives a reset; only `graph/code/` and `graph/kg/` are the
-machine's.
+Eighteen service repositories do not each need a `graph/` nobody asked for, and the point of an
+Obsidian vault is that it is **one** vault you open and see everything in. So the write path is
+the vault and only the vault, which is also why the digest mount can be read-only.
+
+`memory/` and `.pmb` are the only two names a digested folder is expected to have, and both are
+optional. Any folder with markdown in it digests.
 
 ## Setup
 
@@ -93,6 +107,14 @@ cp .env.example .env
 
 Two keys, from different vendors: `EMBEDDING_API_KEY` from Voyage and `LLM_API_KEY` from
 whichever chat provider you uncomment. Also set `DB_PASSWORD`.
+
+**The chat key is spent by `digest` and by nothing else.** Cognify makes two model calls per
+chunk, one extracting entities and relations as structured JSON and one summarising, so it is
+the *output* price that decides the bill. Compare on that, not on the family name: measured
+against a 199 KB folder and scaled to 3.6 MB, `gpt-5-nano` costs $0.35, `gemini-2.0-flash`
+$0.48, `gpt-5-mini` $1.76, `claude-haiku-4-5` $5.37, and `gemini-3.5-flash` $8.89 — that last
+one charges $9.00 per million output tokens, nearly what 2.5-pro does. `gpt-5-mini` is the
+sensible default. Reading calls no model at all.
 
 **3. Database.** PostgreSQL 18 with pgvector. Relational, vector and graph in one container.
 
@@ -116,7 +138,7 @@ cd docs-standard        && pmb init brain .
 ```
 
 `init` runs on the host, not in the container: it registers the MCP server with Claude Code and
-Codex and writes the `/pmb` slash command with this checkout's path already filled in. Restart
+Codex and writes `/pmb` and `/pmb-map` with this checkout's paths already filled in. Restart
 both agents afterwards. There is nothing else to configure.
 
 **5. Digest.**
@@ -137,24 +159,39 @@ resolve afterwards, which costs a `docker compose down -v`.
 be called `maharum` rather than the mount point. A fixed mount would erase the name and every
 folder would be digested into one shared memory that overwrites the last.
 
-**6. Look at it.** Open the folder in Obsidian. `graph/kg/` is the knowledge graph as linked
-notes, rendered by Obsidian's own graph view alongside the notes it came from.
+**6. Look at it.** Open the **vault** in Obsidian, not the project. `graph/kg/<brain>/` is the
+knowledge graph as linked notes, sitting beside the `memory/` notes that produced it.
 
-## Agent Wiring
+## The MCP Server
 
-`pmb init` does all of it. This section is what it did, for when something needs checking.
+Two tools, and neither can write.
 
-Both Claude Code and Codex reach the brain as a remote MCP server at
-`http://127.0.0.1:9000/mcp`, and the same URL works whether the stack runs here or on a VM
-behind the tunnel. `init` registers it with Claude Code through `claude mcp add`, appends an
-`[mcp_servers.plugmybrain]` block to `~/.codex/config.toml` because `codex mcp add` only
-handles stdio servers, and writes `agents/pmb.md` into `~/.claude/commands/` and
-`~/.codex/prompts/` with this checkout's path substituted in.
+| Tool | Does |
+| :- | :- |
+| `recall(query, brain, top_k)` | Searches one brain, or several comma-separated, and returns passages with the file each came from |
+| `brains()` | Lists every memory and its document count. What `/pmb-map` reads |
 
-Both files are appended to, never rewritten: they are yours and hold settings this project
-knows nothing about. Re-running `init` is safe.
+It is `plugmybrain/server.py`, not `cognee-mcp`. cognee-mcp exposes eleven: `remember`,
+`recall`, `forget`, `cognify_file`, `create_dataset_json`, `list_datasets_json`,
+`list_dataset_data_json`, `get_client_info_json`, `upload_file_ui`, `open_cognee_workspace`
+and `visualize_graph_ui`. Three of those write straight into the index, which the next digest
+silently overwrites; four dump JSON that `pmb list` already prints; three open a browser UI
+that has no place in a coding agent. **Every tool an agent can see costs context on every turn,
+whether it is called or not.** Dropping it also dropped its `cognee[docs,neo4j]` dependency
+line, which is where torch, triton and 2.7GB of CUDA libraries came from.
 
-If `claude` is not on PATH, `init` says so and prints the one command to run yourself.
+Isolation is real here, not advisory. Cognee keeps every memory in one vector collection and
+its own `datasets` argument does not scope a search, so `recall` asks Postgres which documents
+belong to the brain, over-fetches, and drops the rest before the agent sees them.
+
+`pmb init` wires it: `claude mcp add` for Claude Code, an appended
+`[mcp_servers.plugmybrain]` block in `~/.codex/config.toml` because `codex mcp add` handles
+stdio servers only, and both slash commands into `~/.claude/commands/` and `~/.codex/prompts/`.
+Both config files are appended to, never rewritten. Re-running `init` is safe. If `claude` is
+not on PATH it says so and prints the one command to run yourself.
+
+The URL is `http://127.0.0.1:9000/mcp` whether the stack runs here or on a VM behind the
+tunnel, which is the point.
 
 ## Deployment
 
@@ -249,7 +286,8 @@ Every variable the project reads. Names only; see [[env.rules.md]].
 | `EMBEDDING_API_KEY` | Yes | Voyage key. Separate from the chat key |
 | `EMBEDDING_ENDPOINT` | If Atlas | Only for a MongoDB Atlas key. A `dash.voyageai.com` key must leave it unset |
 | `LLM_PROVIDER` `LLM_MODEL` `LLM_API_KEY` | Yes | The chat model that builds the graph |
-| `PMB_GRAPH_DIR` | No | Where Graphify's raw output lands. Defaults to `graph/` in this repo |
+| `PMB_DOCS` | No | The one Obsidian vault every brain generates into. Defaults to the sibling `docs` checkout |
+| `PMB_GRAPH_DIR` | No | Where Graphify's raw `graph.json` lands. Defaults to `graph/` in this repo |
 | `POOL_ARGS` `VECTOR_POOL_ARGS` | No | Connection pool sizing |
 | `CHUNK_SIZE` `CHUNK_OVERLAP` | No | Ingestion chunking |
 | `PMB_INDEX` | No | `auto`, `exact`, `ivfflat` or `hnsw`. Default `auto` |
@@ -257,8 +295,8 @@ Every variable the project reads. Names only; see [[env.rules.md]].
 | `BACKUP_BUCKET` `BACKUP_KEEP_DAYS` | No | VM only. Nightly `pg_dump` target and retention |
 | `PMB_VM` `PMB_ZONE` `PMB_PROJECT` | No | Laptop only. Used by `scripts/tunnel.ps1` |
 
-There is no vault setting. The folder you point `pmb` at is the brain, so the choice belongs on
-the command line rather than in a file.
+Which folder is a brain is not a setting: it is the folder you point `pmb` at, and its name is
+the memory. `PMB_DOCS` is only where the generated notes go.
 
 ## Project Structure
 
@@ -268,9 +306,13 @@ plugmybrain/
   bootstrap.py   # init: folder roles, the brain scaffold, and the agent wiring
   ingest.py      # add, cognify, then the vector index cognee does not create
   export.py      # the knowledge graph as Obsidian wikilink notes
+  retrieve.py    # brain-scoped search, enforced against Postgres
+  server.py      # the MCP server: two read-only tools
   manage.py      # list and reset
   cli.py         # the four commands
-agents/pmb.md    # the slash command template, installed by init into both agents
+agents/
+  pmb.md         # /pmb, installed by init into both agents with paths filled in
+  pmb-map.md     # /pmb-map, switching which brain a session reads from
 compose.yaml     # postgres, the MCP server, and the pmb runner behind a profile
 scripts/         # provision-vm.sh, tunnel.ps1, backup.sh, init-pgvector.sql
 tests/
@@ -301,10 +343,10 @@ pasted into an ordinary `.md` still gets through.
 
 - **Only markdown is digested.** Obsidian is the viewer and markdown is the substrate, so PDF,
   docx and csv are not read. Convert first if you need them.
-- **The MCP server does not enforce which memory it reads.** It is stock `cognee-mcp`, and
-  Cognee keeps every memory in one vector collection: its `datasets` argument does not actually
-  scope a search. Passing it narrows the answer, it does not fence it. With one stack per
-  folder the fence is real, because the database is separate.
+- **A chat model is required to digest, and there is no way around it.** Cognify is what turns
+  markdown into a graph, and extraction is a model call. It runs once per digest and never on a
+  query, so the cost is one-off per corpus rather than per question, but "no LLM key at all"
+  would mean no Cognee and therefore no retrieval.
 - **The graph store is a demo feature.** Postgres-as-graph is released by Cognee as a demo; the
   production version is licensed. It is used here because one database holds relational, vector
   and graph at once. If it proves unstable, `GRAPH_DATABASE_PROVIDER=kuzu` works locally with

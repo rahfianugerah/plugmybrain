@@ -1,9 +1,9 @@
 # Paths, the exclusion list, and the guards. One Docker stack runs everywhere, so DB_HOST is
 # the only thing that differs between the laptop and a server.
 #
-# The unit of this tool is a folder. Point it at one and it becomes a brain: its markdown is the
-# memory, `memory/` inside it is the human-authored part, and `graph/` inside it is generated.
-# There is no global vault, because a tool that plugs in anywhere cannot have one home.
+# The unit of this tool is a folder. Point it at one and its markdown becomes a memory named
+# after it. A digested folder is only ever READ; everything generated lands in one Obsidian
+# vault, DOCS, namespaced per brain, so no project repository grows a graph/ nobody asked for.
 from __future__ import annotations
 
 import fnmatch
@@ -20,12 +20,21 @@ GRAPH_DIR = (
     Path(_graph_dir) if Path(_graph_dir).is_absolute() else REPO_ROOT / (_graph_dir or "graph")
 ).resolve()
 
-# The folder's own generated area. Nothing outside it is ever written to.
+# Every generated note from every brain lands here, namespaced by brain, and nowhere else.
+#
+# Not inside the folder that was digested: eighteen service repositories would each grow a
+# graph/ nobody asked for, and the whole point of an Obsidian vault is that it is ONE vault you
+# open and see everything in. A digested folder is therefore only ever read, never written.
+DOCS = (
+    Path(os.environ["PMB_DOCS"]).resolve()
+    if os.getenv("PMB_DOCS")
+    else (REPO_ROOT.parent / "docs").resolve()
+)
+
 GENERATED = "graph"
 
-# Only these two are machine-written. `graph/` itself usually also holds a hand-written
-# README explaining what the folder is, which is committed, so `pmb reset` removes the
-# subfolders rather than the parent. Deleting the parent would take that README with it.
+# Only these two are machine-written. `graph/` itself also holds a hand-written README, which is
+# committed, so `pmb reset` removes what is under the subfolders rather than the parent.
 GENERATED_SUBDIRS = ("code", "kg")
 
 # The one folder `pmb reset` must never touch. It is written by hand, it is committed, and it is
@@ -91,11 +100,16 @@ def namespace(target: Path) -> str:
     return name
 
 
-def generated_path(target: Path, *parts: str) -> Path:
-    """A path inside the folder's generated area. Refuses to escape it, which is what keeps a
-    rebuild from reaching `memory/` or anything else the folder holds."""
-    root = (target.resolve() / GENERATED).resolve()
-    path = root.joinpath(*parts).resolve()
+def generated_path(kind: str, name: str, *parts: str) -> Path:
+    """A path under the vault's generated area, for one brain.
+
+    Refuses to escape it. That guard is the only thing standing between a rebuild and the
+    hand-written notes in `memory/`, which sit in the same vault.
+    """
+    if kind not in GENERATED_SUBDIRS:
+        raise ValueError(f"unknown generated kind {kind!r}. Use one of: {GENERATED_SUBDIRS}")
+    root = (DOCS / GENERATED / kind).resolve()
+    path = root.joinpath(name, *parts).resolve()
     if not path.is_relative_to(root):
         raise ValueError(f"refusing to write outside {root}: {path}")
     return path
@@ -131,7 +145,10 @@ def collect_documents(root: Path) -> tuple[list[Path], list[Path]]:
         # Only a refusal a person would want to hear about: markdown that would otherwise have
         # been digested, or a file whose NAME matches a secret pattern whatever its suffix.
         # Reporting every file under .git and node_modules as "skipped" buries the one .env
-        # that matters under a few hundred lines of nothing.
+        # that matters under a few hundred lines of nothing, and `graph/` is skipped by design
+        # rather than refused: digesting the model's own output is how a graph cites itself.
+        elif GENERATED in path.parts:
+            continue
         elif document or any(fnmatch.fnmatch(path.name, p) for p in EXCLUDED_NAMES):
             skipped.append(path)
     return included, skipped
@@ -148,12 +165,15 @@ def db_connect_kwargs() -> dict[str, object]:
     }
 
 
-def configure(models: bool = True) -> None:
+def configure(chat: bool = True) -> None:
     """Load `.env`, set the invariants, and fail fast on a bad setup.
 
     Must run before `import cognee`, because cognee reads its configuration from the
-    environment at import time. `models=False` skips the key checks for the commands that only
-    read the database and never call a model.
+    environment at import time.
+
+    `chat=False` for everything except `pmb digest`. A chat model is what turns markdown into a
+    graph, and it runs once per digest; reading never calls one. That is the whole cost model:
+    an agent asking a question spends nothing from these keys.
     """
     from dotenv import load_dotenv
 
@@ -186,9 +206,6 @@ def configure(models: bool = True) -> None:
             f"missing in .env: {', '.join(missing)}. Copy .env.example and fill it in."
         )
 
-    if not models:
-        return
-
     # Voyage is embeddings only, so the embedding key is separate from the chat key. Without
     # this check cognee silently falls back to LLM_API_KEY and Voyage rejects it with a 401
     # that names the wrong vendor.
@@ -197,8 +214,11 @@ def configure(models: bool = True) -> None:
             "EMBEDDING_API_KEY is not set. Voyage needs its own key, separate from LLM_API_KEY."
         )
 
-    if not os.getenv("LLM_API_KEY"):
-        raise SystemExit("LLM_API_KEY is not set. Building the graph needs a chat model.")
+    if chat and not os.getenv("LLM_API_KEY"):
+        raise SystemExit(
+            "LLM_API_KEY is not set. Turning markdown into a graph is the one thing that needs "
+            "a chat model, and it runs once per digest. Reading never calls one."
+        )
 
     dimensions = int(os.environ.setdefault("EMBEDDING_DIMENSIONS", "1024"))
     if dimensions > MAX_INDEXABLE_DIMENSIONS:
