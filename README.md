@@ -56,8 +56,9 @@ docker compose ps          # wait for healthy
 optional, `cognee-mcp` would start on cognee's embedded SQLite and LanceDB defaults and quietly
 serve the wrong database.
 
-On the laptop `compose.override.yaml` is picked up automatically and brings up Postgres alone,
-because the agents talk to the VM's MCP server rather than a second local one.
+On the laptop `compose.override.yaml` is picked up automatically. It only moves Postgres to
+port 15432, because a development machine usually already owns 5432. The full stack runs
+either way, so a local `docker compose up -d` gives a working brain with no VM and no tunnel.
 
 The `vector` extension is created on first start by `scripts/init-pgvector.sql`. It runs only
 on an empty data directory, so if you ever change it, `docker compose down -v` first.
@@ -278,14 +279,14 @@ Both Claude Code and Codex reach the brain as a remote MCP server at
 Neither agent runs a cognee process, and neither pays a cold start.
 
 ```powershell
-claude mcp add --transport http cognee http://127.0.0.1:8000/mcp --scope user
+claude mcp add --transport http plugmybrain http://127.0.0.1:8000/mcp --scope user
 ```
 
 For Codex, add this to `~/.codex/config.toml` by hand. `codex mcp add` only registers stdio
 servers, so the CLI cannot do this one:
 
 ```toml
-[mcp_servers.cognee]
+[mcp_servers.plugmybrain]
 url = "http://127.0.0.1:8000/mcp"
 startup_timeout_sec = 60
 ```
