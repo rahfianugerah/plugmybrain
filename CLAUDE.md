@@ -29,13 +29,25 @@ Never read the whole vault to answer a question about this code. That is what th
 
 ## The PlugMyBrain MCP Server
 
-The `plugmybrain` MCP server answers document questions over the knowledge graph, at
-`http://127.0.0.1:9000/mcp` whether the stack runs here or on the VM behind the tunnel.
-**Always pass the dataset**; it is required on every read so one project's memory cannot leak
-into another's answer. `curated` is the vault's own rules and memory.
+At `http://127.0.0.1:9000/mcp`, whether the stack runs here or on the VM behind the tunnel.
+
+**Read with `recall`.** Always pass `datasets`, so one project's memory cannot leak into
+another's answer. `curated` is the vault's own rules and memory.
+
+```json
+{"query": "why is there no licence", "datasets": ["curated"],
+ "search_type": "CHUNKS", "top_k": 15}
+```
+
+`search_type: "CHUNKS"` returns sourced passages with no second model call. Use
+`GRAPH_COMPLETION` only when you actually want prose synthesised, because it costs an extra
+call on a path that runs on every question.
 
 ## Two Things Not to Do
 
-- Do not write to Cognee directly. Write markdown into `../docs/memory/`, then run `pmb sync`.
-  A direct write is an index write and is lost on the next rebuild.
-- Do not hand-edit anything under `../docs/graph/`. It is regenerated and gitignored.
+- **Never call `remember` or `forget`.** They are exposed by the MCP server and they write
+  straight into the index, which the next `pmb sync` overwrites. The memory is markdown: write
+  a note into `../docs/memory/`, then run `pmb sync`. A note that exists only in Cognee is a
+  note that is already gone, and nothing will warn you.
+- Do not hand-edit anything under `../docs/graph/`. It is regenerated and gitignored. If
+  something there is worth keeping, `pmb promote` moves it into the memory properly.
