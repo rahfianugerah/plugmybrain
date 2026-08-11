@@ -1,113 +1,80 @@
-# The single entry point. Printing lives here; every other module returns data instead.
+# The single entry point. Three commands, and printing lives here so every other module
+# returns data instead.
 from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from plugmybrain import config, retrieve
+from plugmybrain import config
 
 
-def _graphify() -> str:
-    exe = shutil.which("graphify")
-    if exe is None:
-        raise SystemExit(
-            "graphify not found. Activate the `env` conda environment, then: pip install graphifyy"
-        )
-    return exe
+def _graphify() -> str | None:
+    """The graphify executable, or None. Missing is not fatal: the code map is the free half of
+    a digest and the memory is the half that matters."""
+    return shutil.which("graphify")
 
 
-def map_folder(target: Path) -> tuple[Path, Path]:
-    """Build a code map for `target`. Returns (graph.json, the report copied into the vault).
+def map_code(target: Path) -> Path | None:
+    """Build a Graphify code map and copy its report into the folder's graph/ area.
 
-    Writes only under PMB_GRAPH_DIR and the vault's generated area, never into `target`.
+    Returns None when there is nothing to map, which a folder of pure markdown always is.
+    `--code-only` keeps every file on the local tree-sitter path: no API key, nothing uploaded.
     """
-    target = target.resolve()
-    if not target.is_dir():
-        raise SystemExit(f"not a directory: {target}")
+    exe = _graphify()
+    if exe is None:
+        return None
 
-    name = config.namespace(target)
-    out_parent = config.GRAPH_DIR / name
+    out_parent = config.GRAPH_DIR / config.namespace(target)
     out_parent.mkdir(parents=True, exist_ok=True)
 
-    # --code-only keeps every file on the local tree-sitter path: no API key, nothing uploaded.
-    # graphify writes <out_parent>/graphify-out/ and honours the target's .gitignore by default.
     # extract is incremental on its own manifest, so a re-run only re-reads what changed.
-    result = subprocess.run(
-        [_graphify(), "extract", str(target), "--code-only", "--out", str(out_parent)],
-    )
-    if result.returncode != 0:
-        raise SystemExit(
-            f"graphify failed on {target}.\n"
-            "A folder with no source files is the usual cause: --code-only indexes code only, "
-            "so a documentation or markdown folder produces an empty graph. "
-            "Documents belong to `pmb ingest`, not `pmb map`."
-        )
+    extract = subprocess.run([exe, "extract", str(target), "--code-only", "--out", str(out_parent)])
+    if extract.returncode:
+        return None
 
-    produced = out_parent / "graphify-out"
-    graph = produced / "graph.json"
-    if not graph.is_file():
-        raise SystemExit(f"graphify produced no graph at {graph}")
+    # extract writes graph.json only; the report comes from clustering. --no-label keeps
+    # community naming off the model, so the whole map stays at zero tokens.
+    subprocess.run([exe, "cluster-only", str(out_parent), "--no-label"])
 
-    # `extract` writes graph.json only. GRAPH_REPORT.md and graph.html come from clustering,
-    # and --no-label keeps community naming off the LLM, so the whole map stays at zero tokens.
-    subprocess.run([_graphify(), "cluster-only", str(out_parent), "--no-label"], check=True)
-
-    report = produced / "GRAPH_REPORT.md"
+    report = out_parent / "graphify-out" / "GRAPH_REPORT.md"
     if not report.is_file():
-        raise SystemExit(f"graphify produced no report at {report}")
+        return None
 
-    destination = config.generated_path("code", name, "GRAPH_REPORT.md")
+    destination = config.generated_path(target, "code", "GRAPH_REPORT.md")
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(report, destination)
-    return graph, destination
+    return destination
 
 
-def install_agent_commands() -> list[Path]:
-    """Copy the vault's slash commands into Claude Code and Codex, and return what was written.
+async def digest(target: Path, dry_run: bool = False) -> None:
+    from plugmybrain import export as export_module
+    from plugmybrain import ingest as ingest_module
 
-    One file serves both: they share the frontmatter fields and `$ARGUMENTS`. Read from the
-    vault rather than from this repository, so the standards repo owns them and switching vaults
-    switches the commands too.
-    """
-    source = config.AGENTS_DIR
-    commands = sorted(source.glob("*.md")) if source.is_dir() else []
-    if not commands:
-        raise SystemExit(
-            f"no command files in {source}.\n"
-            "The commands live in the vault, so they follow whichever vault PMB_VAULT points at. "
-            "Create that folder, or set PMB_AGENTS_DIR to where yours are."
-        )
+    config.configure()
+    name = config.namespace(target)
 
-    home = Path.home()
-    written: list[Path] = []
-    # Claude Code reads ~/.claude/commands; Codex reads ~/.codex/prompts. Codex calls these
-    # custom prompts and is migrating to skills, but prompts are what still yields a /command.
-    for target in (home / ".claude" / "commands", home / ".codex" / "prompts"):
-        target.mkdir(parents=True, exist_ok=True)
-        for command in commands:
-            destination = target / command.name
-            shutil.copyfile(command, destination)
-            written.append(destination)
-    return written
+    report = await ingest_module.ingest(target, dataset=name, dry_run=dry_run)
 
-
-def _print_ingest(report) -> None:
-    print(f"dataset:  {report.dataset}")
-    print(f"ingested: {report.ingested} document(s)")
+    print(f"folder:   {target}")
+    print(f"memory:   {name}")
+    print(f"markdown: {report.ingested} file(s) digested")
     print(f"skipped:  {len(report.skipped)} file(s) by the exclusion list")
     for path in report.skipped[:10]:
         print(f"          {path}")
     if len(report.skipped) > 10:
         print(f"          ... and {len(report.skipped) - 10} more")
-    if report.estimate is not None:
-        print(f"estimate: {report.estimate}")
     for dup in report.duplicates:
-        print(f"duplicate: {dup}, ingested once")
+        print(f"duplicate: {dup}, digested once")
+
+    if dry_run:
+        print(f"estimate: {report.estimate}")
+        print("\nNothing was spent. Drop --dry-run to digest for real.")
+        return
+
     for created in report.indexes_created:
         print(f"indexed:  {created}")
     for small in report.indexes_skipped:
@@ -117,175 +84,100 @@ def _print_ingest(report) -> None:
     for refused in report.indexes_refused:
         print(f"REFUSED:  {refused} did not match the identifier allowlist and was left unindexed")
 
+    code = map_code(target)
+    print(f"code map: {code if code else 'none, no source files found'}")
+
+    graph = await export_module.export(target)
+    print(f"graph:    {graph.written} of {graph.total} note(s) in {graph.directory}")
+    if graph.dropped:
+        print(f"          {graph.dropped} less-connected node(s) dropped")
+    print(f"\nOpen {target} in Obsidian to see it.")
+
+
+def _print_status(status) -> None:
+    print(f"folder:    {status.target}")
+    print(f"memory:    {status.name}")
+    print()
+    print(f"markdown in the folder:   {status.markdown}")
+    print(f"  of which memory/:       {status.human_notes} (human-authored, survives a reset)")
+    print(f"  digested into Cognee:   {status.ingested}")
+    print(f"  generated into graph/:  {status.generated_notes} (rebuilt by digest)")
+    print(f"  skipped as a secret:    {status.skipped}")
+    if status.markdown != status.ingested:
+        print(f"  -> {status.markdown - status.ingested} not digested. Run `pmb digest`.")
+    print()
+    print(f"database:  {status.database} ({status.size}), {status.chunks} chunk(s) embedded")
+    if not status.datasets:
+        print("           empty. Nothing has been digested yet.")
+        return
+    width = max(len(d.name) for d in status.datasets)
+    for row in status.datasets:
+        here = "  <- this folder" if row.name == status.name else ""
+        print(f"           {row.name:<{width}}  {row.documents:>4} doc(s)  {row.created}{here}")
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="pmb", description="PlugMyBrain - Plug & play memory for your AI agents."
+        prog="pmb",
+        description="PlugMyBrain - a plug-and-play AI memory for any folder of markdown.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    map_cmd = sub.add_parser("map", help="build a Graphify code map for a folder")
-    map_cmd.add_argument("target", type=Path, help="the folder to map")
+    def target_argument(command):
+        command.add_argument(
+            "target", type=Path, nargs="?", default=Path.cwd(), help="the folder, default here"
+        )
 
-    ingest_cmd = sub.add_parser("ingest", help="ingest a folder's documents into its own dataset")
-    ingest_cmd.add_argument("target", type=Path, help="the folder to ingest")
-    ingest_cmd.add_argument(
-        "--dry-run", action="store_true", help="estimate the cognify cost and stop"
+    digest_cmd = sub.add_parser(
+        "digest", help="turn a folder's markdown into memory, a code map and a graph"
     )
-    ingest_cmd.add_argument("--memify", action="store_true", help="run the extra enrichment pass")
+    target_argument(digest_cmd)
+    digest_cmd.add_argument("--dry-run", action="store_true", help="estimate the cost and stop")
 
-    sync_cmd = sub.add_parser("sync", help="re-ingest the curated rules and memory")
-    sync_cmd.add_argument(
-        "--dry-run", action="store_true", help="estimate the cognify cost and stop"
+    reset_cmd = sub.add_parser("reset", help="throw away the derived memory, never the markdown")
+    target_argument(reset_cmd)
+    reset_cmd.add_argument(
+        "--all", action="store_true", dest="everything", help="every folder, not just this one"
     )
+    reset_cmd.add_argument("--yes", action="store_true", help="skip the confirmation")
 
-    search_cmd = sub.add_parser("search", help="search one dataset")
-    search_cmd.add_argument("query")
-    search_cmd.add_argument(
-        "--project", required=True, help="the dataset to search, or several as a,b,c"
-    )
-    search_cmd.add_argument("--mode", default="chunks", choices=list(retrieve.MODES))
-    search_cmd.add_argument("--top-k", type=int, default=15)
-
-    export_cmd = sub.add_parser("export", help="render the knowledge graph as vault notes")
-    export_cmd.add_argument("--project", required=True, help="the dataset to export")
-    export_cmd.add_argument("--limit", type=int, default=500, help="most-connected nodes to write")
-
-    sub.add_parser("install", help="install the /pmb slash commands into Claude Code and Codex")
-
-    note_cmd = sub.add_parser("note", help="write a memory note; the body is read from stdin")
-    note_cmd.add_argument("title", help="states the thing, not the topic")
-    note_cmd.add_argument("--type", default="session", choices=list(config.NOTE_TYPES))
-    note_cmd.add_argument("--tags", help="comma-separated, defaults to the note type")
-    note_cmd.add_argument("--force", action="store_true", help="overwrite an existing note")
-
-    promote_cmd = sub.add_parser(
-        "promote", help="keep a generated note: copy it into the human-authored memory"
-    )
-    promote_cmd.add_argument("source", type=Path, help="a note under the vault's graph/ area")
-    promote_cmd.add_argument("--type", default="fact", choices=list(config.NOTE_TYPES))
-    promote_cmd.add_argument("--title", help="override the note's title")
-    promote_cmd.add_argument("--tags", help="comma-separated, defaults to the dataset name")
-    promote_cmd.add_argument("--force", action="store_true", help="overwrite an existing note")
-
-    viz_cmd = sub.add_parser("visualize", help="render the knowledge graph as one HTML file")
-    viz_cmd.add_argument("--project", required=True, help="the dataset to render")
-    viz_cmd.add_argument("--max-nodes", type=int, default=500)
-
-    eval_cmd = sub.add_parser("eval", help="score the question set and time the warm path")
-    eval_cmd.add_argument("--project", default=config.CURATED_DATASET)
-
-    serve_cmd = sub.add_parser("serve", help="run the HTTP API locally")
-    serve_cmd.add_argument("--host", default="127.0.0.1")
+    list_cmd = sub.add_parser("list", help="what the memory holds, and what it was built from")
+    target_argument(list_cmd)
 
     args = parser.parse_args(argv)
+    target = args.target.resolve()
+    if not target.is_dir():
+        raise SystemExit(f"not a directory: {target}")
 
-    if args.command == "map":
-        graph, report = map_folder(args.target)
-        print(f"graph:  {graph}")
-        print(f"report: {report}")
+    if args.command == "digest":
+        asyncio.run(digest(target, dry_run=args.dry_run))
         return 0
 
-    if args.command in ("ingest", "sync"):
-        from plugmybrain import ingest as ingest_module
+    if args.command == "list":
+        from plugmybrain import manage
 
-        if args.command == "sync":
-            paths, dataset = list(config.CURATED_PATHS), config.CURATED_DATASET
-        else:
-            paths, dataset = [args.target], config.namespace(args.target)
-        report = asyncio.run(
-            ingest_module.ingest(
-                paths,
-                dataset=dataset,
-                dry_run=args.dry_run,
-                memify=getattr(args, "memify", False),
-            )
-        )
-        _print_ingest(report)
+        _print_status(asyncio.run(manage.status(target)))
         return 0
 
-    if args.command == "search":
-        results = asyncio.run(
-            retrieve.search(args.query, dataset=args.project, mode=args.mode, top_k=args.top_k)
-        )
-        print(f"sources: {', '.join(retrieve.sources(results)) or 'none cited'}")
-        for item in results:
-            print(item)
-        return 0
+    if args.command == "reset":
+        from plugmybrain import manage
 
-    if args.command == "export":
-        from plugmybrain import export as export_module
+        scope = "EVERY folder's memory" if args.everything else f"the memory for {target.name}"
+        # Confirmed rather than assumed: this is the only destructive command, and a digest of a
+        # large folder costs real money to rebuild even though nothing is truly lost.
+        if not args.yes:
+            print(f"About to delete {scope} from the database, and {target / config.GENERATED}.")
+            print(f"{target / config.HUMAN} and every other markdown file are left alone.")
+            if input("Type yes to continue: ").strip().lower() != "yes":
+                print("Nothing was deleted.")
+                return 1
 
-        report = asyncio.run(export_module.export(args.project, limit=args.limit))
-        print(f"wrote {report.written} of {report.total} node(s) to {report.directory}")
-        if report.dropped:
-            print(
-                f"dropped {report.dropped} less-connected node(s). Raise --limit to include them."
-            )
-        return 0
-
-    if args.command == "install":
-        for path in install_agent_commands():
-            print(f"wrote: {path}")
-        print("\nRestart Claude Code and Codex; both load commands at session start.")
-        return 0
-
-    if args.command == "note":
-        from plugmybrain import promote as promote_module
-
-        body = sys.stdin.read() if not sys.stdin.isatty() else ""
-        report = promote_module.write_note(
-            args.title,
-            body,
-            note_type=args.type,
-            tags=[t.strip() for t in args.tags.split(",")] if args.tags else None,
-            force=args.force,
-        )
-        print(f"wrote: {report.destination}")
-        print("Run `pmb sync` to fold it into the memory.")
-        return 0
-
-    if args.command == "promote":
-        from plugmybrain import promote as promote_module
-
-        report = promote_module.promote(
-            args.source,
-            note_type=args.type,
-            title=args.title,
-            tags=[t.strip() for t in args.tags.split(",")] if args.tags else None,
-            force=args.force,
-        )
-        print(f"promoted: {report.destination}")
-        print("It is yours now: committed, editable, and ingested as `curated` on the next sync.")
-        print("Fill in the Why line, then run: pmb sync")
-        return 0
-
-    if args.command == "visualize":
-        from plugmybrain import export as export_module
-
-        path = asyncio.run(export_module.visualize(args.project, max_nodes=args.max_nodes))
-        print(f"open: {path}")
-        return 0
-
-    if args.command == "eval":
-        from plugmybrain import eval as eval_module
-
-        report = asyncio.run(eval_module.run(dataset=args.project))
-        for answer in report.answers:
-            mark = "ok  " if answer.hit else "MISS"
-            hop = " [multi-hop]" if answer.multihop else ""
-            print(f"{mark} {answer.seconds:6.2f}s  {answer.question}{hop}")
-            if not answer.hit:
-                print(f"      expected {answer.expected}, cited {answer.found or 'nothing'}")
-        print(f"\nscore: {report.score}   p50: {report.p50:.2f}s   p95: {report.p95:.2f}s")
-        print("No Cloud Run cold start is on this path in either profile.")
-        return 0
-
-    if args.command == "serve":
-        import uvicorn
-
-        # Cloud Run injects PORT and the container must read it rather than hardcode 8080.
-        uvicorn.run("plugmybrain.api:app", host=args.host, port=int(os.getenv("PORT", "8080")))
+        report = asyncio.run(manage.reset(target, everything=args.everything))
+        count = "all" if report.documents < 0 else str(report.documents)
+        print(f"deleted:  {count} document(s) from the memory ({report.scope})")
+        print(f"deleted:  {report.generated}")
+        print(f"kept:     {report.kept if report.kept else 'every markdown file in the folder'}")
+        print("\nRun `pmb digest` to build it again from the markdown.")
         return 0
 
     return 1

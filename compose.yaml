@@ -79,13 +79,21 @@ services:
       postgres:
         condition: service_healthy
 
-  cognee-ingest:
+  pmb:
     build: .
     # Behind a profile, so `docker compose up -d` is structurally incapable of starting it
     # alongside serving. On 2 GiB that is the difference between slow and OOM-killed, and a
     # file that enforces it beats remembering to.
-    profiles: ["ingest"]
-    command: ["pmb", "sync"]
+    #
+    # No folder is mounted here, because the folder is chosen per run and its NAME is the memory
+    # it lands in. Mount it under /w so the basename survives the trip into the container:
+    #
+    #   docker compose run --rm -v C:/Users/Rahfi/docs:/w/docs pmb digest /w/docs
+    #
+    # A fixed mount point would erase the name, and every folder would be digested into one
+    # shared memory that overwrites the last.
+    profiles: ["cli"]
+    entrypoint: ["pmb"]
     env_file: .env
     environment:
       DB_HOST: postgres
@@ -94,19 +102,9 @@ services:
       SYSTEM_ROOT_DIRECTORY: /data/cognee-system
       REQUIRE_AUTHENTICATION: "false"
       ENABLE_BACKEND_ACCESS_CONTROL: "false"
-      # The vault is mounted at /vault below. Without this the app resolves PMB_VAULT from
-      # .env, which is a host path, and finds nothing to ingest inside the container.
-      PMB_VAULT: /vault
-      # Which is why the dataset name has to be passed separately: /vault carries no trace of
-      # the folder it came from, so without this every vault would be ingested as "vault" and
-      # overwrite the last one. Empty by default and checked in configure(), not with compose's
-      # `:?`, which is evaluated for every compose command and would break `up -d` as well.
-      PMB_DATASET: ${PMB_DATASET:-}
     mem_limit: 1200m
     volumes:
       - pmb-cognee:/data
-      # The vault, read-only: ingestion reads the curated rules and must never write to them.
-      - ${PMB_VAULT:-../docs}:/vault:ro
     depends_on:
       postgres:
         condition: service_healthy

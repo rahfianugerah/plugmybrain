@@ -23,6 +23,3 @@ dependencies:
       - graphifyy==0.9.38
       - asyncpg
       - python-dotenv
-      - pyyaml
-      - fastapi
-      - uvicorn[standard]

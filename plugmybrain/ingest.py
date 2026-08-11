@@ -1,9 +1,8 @@
-# Ingestion: add, cognify, index. This file is `pmb ingest`, `pmb sync`, and the one-shot
-# `cognee-ingest` container. Never co-resident with serving on a 2 GiB VM.
+# Ingestion: add, cognify, index. The half of `pmb digest` that costs money, and the reason the
+# `pmb` service sits behind a compose profile: never co-resident with serving on a 2 GiB VM.
 from __future__ import annotations
 
 import hashlib
-import inspect
 import math
 import re
 from dataclasses import dataclass, field
@@ -146,38 +145,23 @@ async def ensure_vector_index() -> IngestReport:
     return report
 
 
-async def _memify(cognee, dataset: str) -> None:
-    """cognee 1.4.2 exports memify, but its definition could not be located to pin the
-    signature, so the accepted arguments are read off the installed function."""
-    parameters = inspect.signature(cognee.memify).parameters
-    await cognee.memify(**({"datasets": [dataset]} if "datasets" in parameters else {}))
-
-
-async def ingest(
-    paths: list[Path],
-    dataset: str,
-    dry_run: bool = False,
-    memify: bool = False,
-) -> IngestReport:
-    """Ingest every document under `paths` into `dataset`, then index it.
+async def ingest(target: Path, dataset: str, dry_run: bool = False) -> IngestReport:
+    """Ingest every markdown file under `target` into `dataset`, then index it.
 
     Idempotent: cognee loads incrementally, and ensure_vector_index only creates what is
     missing.
     """
-    config.configure()
     import cognee
 
-    documents: list[Path] = []
-    skipped: list[Path] = []
-    for root in paths:
-        if not root.is_dir():
-            raise SystemExit(f"not a directory: {root}")
-        found, blocked = config.collect_documents(root)
-        documents.extend(found)
-        skipped.extend(blocked)
+    if not target.is_dir():
+        raise SystemExit(f"not a directory: {target}")
+    documents, skipped = config.collect_documents(target)
 
     if not documents:
-        raise SystemExit(f"no documents found under: {', '.join(str(p) for p in paths)}")
+        raise SystemExit(
+            f"no markdown found under {target}. PlugMyBrain digests markdown; a folder with "
+            "none has nothing to remember."
+        )
 
     # Two files with identical bytes make cognee build one Data row and then attach it to the
     # dataset twice, which dies in SQLAlchemy's identity map. This project causes it on purpose:
@@ -206,8 +190,6 @@ async def ingest(
         return report
 
     await cognee.cognify(datasets=[dataset])
-    if memify:
-        await _memify(cognee, dataset)
 
     indexes = await ensure_vector_index()
     report.indexes_created = indexes.indexes_created

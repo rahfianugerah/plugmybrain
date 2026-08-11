@@ -1,23 +1,25 @@
-# The guards that matter: never write above the generated area, never ingest a secret.
+# The guards that matter: never write outside the generated area, never ingest a secret,
+# never miscount what the folder holds.
 from pathlib import Path
 
 import pytest
 
-from plugmybrain import config, ingest, promote
+from plugmybrain import config, export, ingest, manage
 
 
 def test_namespace_is_the_lowercased_directory_name():
     assert config.namespace(Path("C:/some/Path/My-Project")) == "my-project"
 
 
-def test_generated_path_stays_inside_the_generated_area():
-    path = config.generated_path("code", "docs", "GRAPH_REPORT.md")
-    assert path.is_relative_to(config.VAULT_GENERATED.resolve())
+def test_generated_path_stays_inside_the_folders_generated_area(tmp_path):
+    path = config.generated_path(tmp_path, "code", "GRAPH_REPORT.md")
+    assert path.is_relative_to((tmp_path / config.GENERATED).resolve())
 
 
-def test_generated_path_refuses_to_escape():
+def test_generated_path_refuses_to_escape(tmp_path):
+    # The one that matters: `memory/` is human-authored, and a rebuild must not reach it.
     with pytest.raises(ValueError):
-        config.generated_path("..", "memory", "stolen.md")
+        config.generated_path(tmp_path, "..", "memory", "stolen.md")
 
 
 @pytest.mark.parametrize(
@@ -33,11 +35,15 @@ def test_secret_directories_are_excluded(directory):
     assert config.is_excluded(Path("/project") / directory / "notes.md")
 
 
+def test_the_generated_area_is_never_digested_back_into_itself():
+    assert config.is_excluded(Path("/project") / config.GENERATED / "kg" / "node.md")
+
+
 def test_ordinary_documents_are_not_excluded():
     assert not config.is_excluded(Path("/project/docs/commit.rules.md"))
 
 
-def test_collect_documents_splits_included_from_skipped(tmp_path):
+def test_collect_documents_takes_markdown_and_reports_the_secrets_it_refused(tmp_path):
     (tmp_path / "keep.md").write_text("hello", encoding="utf-8")
     (tmp_path / "ignore.py").write_text("x = 1", encoding="utf-8")
     (tmp_path / ".env").write_text("SECRET=x", encoding="utf-8")
@@ -46,9 +52,24 @@ def test_collect_documents_splits_included_from_skipped(tmp_path):
 
     included, skipped = config.collect_documents(tmp_path)
 
-    # Source is Graphify's job, so .py is neither ingested nor reported as a blocked secret.
+    # Source is Graphify's job, so .py is neither digested nor reported as a blocked secret.
     assert [p.name for p in included] == ["keep.md"]
     assert {p.name for p in skipped} == {".env", "leak.md"}
+
+
+def test_the_counts_list_reports_separate_human_from_generated(tmp_path):
+    (tmp_path / "README.md").write_text("#", encoding="utf-8")
+    (tmp_path / config.HUMAN).mkdir()
+    (tmp_path / config.HUMAN / "a-decision.md").write_text("#", encoding="utf-8")
+    (tmp_path / config.GENERATED / "kg").mkdir(parents=True)
+    (tmp_path / config.GENERATED / "kg" / "node.md").write_text("#", encoding="utf-8")
+
+    markdown, skipped, human, generated = manage._on_disk(tmp_path)
+
+    # The generated note is counted, but never as something to digest: re-digesting the model's
+    # own output is how a graph starts citing itself.
+    assert (markdown, human, generated) == (2, 1, 1)
+    assert skipped == 0
 
 
 def test_dimension_guard_matches_the_pgvector_index_ceiling():
@@ -72,67 +93,5 @@ def test_an_explicit_index_choice_is_never_overridden(kind):
     assert ingest.choose_index(5_000_000, kind=kind) == kind
 
 
-# promote is the only code that writes into the human-authored memory, so its two guards are
-# the ones worth a test: it reads only from the generated area, and it writes only into memory.
-def test_memory_path_rejects_an_unknown_note_type():
-    with pytest.raises(ValueError):
-        config.memory_path("nonsense", "x.md")
-
-
-def test_memory_path_refuses_to_escape_the_memory_folder():
-    with pytest.raises(ValueError):
-        config.memory_path("fact", "../../rules/commit.rules.md")
-
-
-def test_promote_refuses_a_source_outside_the_generated_area(tmp_path):
-    stray = tmp_path / "somewhere-else.md"
-    stray.write_text("# Not generated", encoding="utf-8")
-    with pytest.raises(SystemExit):
-        promote.promote(stray)
-
-
-def test_a_relative_path_resolves_against_the_repo_not_the_shell(monkeypatch):
-    monkeypatch.setenv("PMB_VAULT", "../docs")
-    assert (
-        config._repo_relative("PMB_VAULT", Path("/unused"))
-        == (config.REPO_ROOT.parent / "docs").resolve()
-    )
-
-
-def test_an_absolute_path_is_left_alone(monkeypatch):
-    monkeypatch.setenv("PMB_VAULT", str(Path("/tmp/elsewhere")))
-    assert config._repo_relative("PMB_VAULT", Path("/unused")) == Path("/tmp/elsewhere").resolve()
-
-
-def test_slug_matches_the_kebab_case_filename_rule():
-    assert promote.slug("Loader uses Polars, not pandas") == "loader-uses-polars-not-pandas"
-
-
-def test_a_comma_separated_project_becomes_several_datasets():
-    from plugmybrain import retrieve
-
-    assert retrieve._names("docs-standard, Maia-Erp-Backend ") == [
-        "docs-standard",
-        "maia-erp-backend",
-    ]
-    assert retrieve._names("curated") == ["curated"]
-    with pytest.raises(SystemExit):
-        retrieve._names(" , ")
-
-
-def test_the_container_must_name_the_vault_it_mounted(monkeypatch, tmp_path):
-    """/vault is the mount point, so the folder name is gone and PMB_DATASET has to supply it."""
-    import importlib
-
-    (tmp_path / "vault" / "memory").mkdir(parents=True)
-    monkeypatch.setenv("PMB_VAULT", str(tmp_path / "vault"))
-
-    monkeypatch.delenv("PMB_DATASET", raising=False)
-    assert importlib.reload(config).CURATED_DATASET == "vault"
-
-    monkeypatch.setenv("PMB_DATASET", "Docs-Standard")
-    assert importlib.reload(config).CURATED_DATASET == "docs-standard"
-
-    monkeypatch.delenv("PMB_VAULT")
-    monkeypatch.delenv("PMB_DATASET")
-    importlib.reload(config)
+def test_slug_is_stable_so_a_re_digest_overwrites_rather_than_duplicates():
+    assert export.slug("Loader uses Polars, not pandas") == "loader-uses-polars-not-pandas"

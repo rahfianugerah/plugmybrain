@@ -1,5 +1,9 @@
-# Paths and cognee settings. One Docker stack runs everywhere, so DB_HOST is the only thing
-# that differs between the laptop and the VM. There is no profile switch.
+# Paths, the exclusion list, and the guards. One Docker stack runs everywhere, so DB_HOST is
+# the only thing that differs between the laptop and a server.
+#
+# The unit of this tool is a folder. Point it at one and it becomes a brain: its markdown is the
+# memory, `memory/` inside it is the human-authored part, and `graph/` inside it is generated.
+# There is no global vault, because a tool that plugs in anywhere cannot have one home.
 from __future__ import annotations
 
 import fnmatch
@@ -8,45 +12,21 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# Graphify's raw output: graph.json and its manifest, which are machine files nobody reads.
+# Kept inside this repository so pointing the tool at someone else's folder leaves no json in it.
+# Only the rendered report is copied into the folder, where Obsidian can show it.
+_graph_dir = os.getenv("PMB_GRAPH_DIR", "")
+GRAPH_DIR = (
+    Path(_graph_dir) if Path(_graph_dir).is_absolute() else REPO_ROOT / (_graph_dir or "graph")
+).resolve()
 
-def _repo_relative(name: str, default: Path) -> Path:
-    """Read a path from the environment, resolving a relative value against the repository.
+# The folder's own generated area. Everything here is rebuilt by `pmb digest` and removed by
+# `pmb reset`; nothing else in the folder is ever written to.
+GENERATED = "graph"
 
-    Not against the working directory: `pmb` is run from wherever you happen to be, and a
-    vault that moves with your shell is a vault that silently points at nothing.
-    """
-    value = os.getenv(name)
-    if not value:
-        return default.resolve()
-    path = Path(value)
-    return (path if path.is_absolute() else REPO_ROOT / path).resolve()
-
-
-# The vault is a sibling checkout by default, because that is how the two repos sit on disk.
-VAULT = _repo_relative("PMB_VAULT", REPO_ROOT.parent / "docs")
-
-# Graphify output lands here, never inside the folder that was mapped.
-GRAPH_DIR = _repo_relative("PMB_GRAPH_DIR", REPO_ROOT / "graph")
-
-# The only part of the vault this project may write to. Everything above it is human-authored.
-VAULT_GENERATED = VAULT / "graph"
-
-# The slash commands live in the vault, not in this repository. They tell an agent how to work
-# here, which makes them a standard rather than part of the tool: switch the vault and every
-# project picks up that vault's commands, with nothing to copy and no second copy to drift.
-AGENTS_DIR = _repo_relative("PMB_AGENTS_DIR", VAULT / "agents")
-
-# The human control plane: rules and memory. Wins on conflict with any project dataset.
-# Named after the vault, exactly as a project dataset is named after its folder. A fixed name
-# like "curated" meant every vault claimed the same dataset, so switching vaults collided with
-# the previous one and forced a wipe. Named this way, two vaults coexist and switching back
-# costs nothing.
-#
-# PMB_DATASET overrides it because the container cannot see the host's folder name: the vault is
-# bind-mounted at /vault, so every vault ingested that way would otherwise be called "vault" and
-# collide exactly as "curated" did. compose passes it, so the name follows the vault either way.
-CURATED_DATASET = (os.getenv("PMB_DATASET") or VAULT.name).lower()
-CURATED_PATHS = (VAULT / "rules", VAULT / "memory")
+# The one folder `pmb reset` must never touch. It is written by hand, it is committed, and it is
+# the only reason a wiped database is a rebuild rather than a loss.
+HUMAN = "memory"
 
 # pgvector refuses to build an approximate index on a `vector` column wider than this, for
 # either HNSW or IVFFlat. Exceeding it does not fail loudly, it just leaves every search doing
@@ -61,9 +41,9 @@ INDEX_KIND = os.getenv("PMB_INDEX", "auto")
 # lists = rows / 1000, so a small table gets one list, which is a sequential scan plus overhead.
 FLAT_THRESHOLD = int(os.getenv("PMB_INDEX_THRESHOLD", "10000"))
 
-# Documents only. Code structure is Graphify's job, and ingesting source would pay a model to
-# rediscover what `pmb map` already extracted for nothing.
-DOCUMENT_SUFFIXES = frozenset({".md", ".txt", ".rst", ".pdf", ".docx", ".csv"})
+# Markdown only. Obsidian is the viewer, markdown is the substrate, and code structure is
+# Graphify's job: ingesting source would pay a model to rediscover what the map already has.
+DOCUMENT_SUFFIXES = frozenset({".md"})
 
 # Never read, whatever folder the tool is pointed at. Ingestion uploads file contents, so this
 # is the last thing standing between an arbitrary target and a leaked key.
@@ -77,7 +57,7 @@ EXCLUDED_DIRS = frozenset(
         "dist",
         "build",
         "__pycache__",
-        "graph",
+        GENERATED,
         "graphify-out",
         ".obsidian",
     }
@@ -95,33 +75,23 @@ EXCLUDED_NAMES = (
 
 
 def namespace(target: Path) -> str:
-    """The dataset name for a mapped or ingested folder: its directory name, lowercased."""
+    """The dataset name for a folder: its directory name, lowercased.
+
+    This is why the ingest container mounts at `/w/<name>` rather than a fixed path. A fixed
+    mount point erases the folder's name, and every folder would then be ingested under the
+    mount point's name and overwrite the last one.
+    """
     name = target.resolve().name.lower()
     if not name:
-        raise ValueError(f"cannot derive a namespace from {target}")
+        raise ValueError(f"cannot derive a name from {target}")
     return name
 
 
-def generated_path(*parts: str) -> Path:
-    """A path inside the vault's generated area. Refuses to escape it, so a regeneration
-    can never touch a human-authored note."""
-    path = VAULT_GENERATED.joinpath(*parts).resolve()
-    if not path.is_relative_to(VAULT_GENERATED.resolve()):
-        raise ValueError(f"refusing to write outside {VAULT_GENERATED}: {path}")
-    return path
-
-
-NOTE_TYPES = ("fact", "decision", "session", "reference")
-
-
-def memory_path(note_type: str, filename: str) -> Path:
-    """A path inside the vault's human-authored memory. The only place this project is allowed
-    to write above the generated area, so the guard lives here and `promote.py` is its only
-    caller."""
-    if note_type not in NOTE_TYPES:
-        raise ValueError(f"unknown note type {note_type!r}. Use one of: {', '.join(NOTE_TYPES)}")
-    root = (VAULT / "memory").resolve()
-    path = (root / note_type / filename).resolve()
+def generated_path(target: Path, *parts: str) -> Path:
+    """A path inside the folder's generated area. Refuses to escape it, which is what keeps a
+    rebuild from reaching `memory/` or anything else the folder holds."""
+    root = (target.resolve() / GENERATED).resolve()
+    path = root.joinpath(*parts).resolve()
     if not path.is_relative_to(root):
         raise ValueError(f"refusing to write outside {root}: {path}")
     return path
@@ -139,7 +109,7 @@ def is_excluded(path: Path) -> bool:
 
 
 def collect_documents(root: Path) -> tuple[list[Path], list[Path]]:
-    """Split a folder into the documents that will be ingested and the files that will not.
+    """Split a folder into the markdown that will be ingested and the files that will not.
 
     The skipped list is returned rather than discarded, because a silent skip reads as
     "covered everything" when it did not.
@@ -150,15 +120,21 @@ def collect_documents(root: Path) -> tuple[list[Path], list[Path]]:
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
-        if is_excluded(path):
+        document = path.suffix.lower() in DOCUMENT_SUFFIXES
+        if not is_excluded(path):
+            if document:
+                included.append(path)
+        # Only a refusal a person would want to hear about: markdown that would otherwise have
+        # been digested, or a file whose NAME matches a secret pattern whatever its suffix.
+        # Reporting every file under .git and node_modules as "skipped" buries the one .env
+        # that matters under a few hundred lines of nothing.
+        elif document or any(fnmatch.fnmatch(path.name, p) for p in EXCLUDED_NAMES):
             skipped.append(path)
-        elif path.suffix.lower() in DOCUMENT_SUFFIXES:
-            included.append(path)
     return included, skipped
 
 
 def db_connect_kwargs() -> dict[str, object]:
-    """asyncpg connection arguments for the active profile."""
+    """asyncpg connection arguments."""
     return {
         "host": os.environ["DB_HOST"],
         "port": int(os.environ.get("DB_PORT", "5432")),
@@ -168,11 +144,12 @@ def db_connect_kwargs() -> dict[str, object]:
     }
 
 
-def configure() -> None:
-    """Load `.env`, derive the profile's settings, and fail fast on a bad one.
+def configure(models: bool = True) -> None:
+    """Load `.env`, set the invariants, and fail fast on a bad setup.
 
     Must run before `import cognee`, because cognee reads its configuration from the
-    environment at import time.
+    environment at import time. `models=False` skips the key checks for the commands that only
+    read the database and never call a model.
     """
     from dotenv import load_dotenv
 
@@ -197,26 +174,6 @@ def configure() -> None:
     # error, which says more than "connection test timed out" ever did.
     os.environ.setdefault("COGNEE_SKIP_CONNECTION_TEST", "true")
 
-    # A wrong PMB_VAULT is silent otherwise: ingestion finds no documents and reports an empty
-    # corpus, which reads as "the vault is empty" rather than "the path is wrong".
-    if not (VAULT / "memory").is_dir():
-        raise SystemExit(
-            f"no vault at {VAULT} (expected a memory/ folder inside it).\n"
-            "Leave PMB_VAULT blank for the default, or set it relative to this repository, "
-            "for example ../docs."
-        )
-
-    # "vault" is the container's mount point, never a real vault's name. Reaching here means the
-    # vault was bind-mounted without PMB_DATASET, and the ingest would land in a dataset shared
-    # by every vault ever mounted, quietly overwriting the last one.
-    if CURATED_DATASET == "vault":
-        raise SystemExit(
-            "PMB_DATASET is not set. The vault is mounted at /vault, so the container cannot "
-            "tell which vault it is. Name it, for example:\n"
-            "  PMB_VAULT=../docs-standard PMB_DATASET=docs-standard "
-            "docker compose run --rm cognee-ingest"
-        )
-
     missing = [
         key for key in ("DB_HOST", "DB_NAME", "DB_USERNAME", "DB_PASSWORD") if not os.getenv(key)
     ]
@@ -224,6 +181,9 @@ def configure() -> None:
         raise SystemExit(
             f"missing in .env: {', '.join(missing)}. Copy .env.example and fill it in."
         )
+
+    if not models:
+        return
 
     # Voyage is embeddings only, so the embedding key is separate from the chat key. Without
     # this check cognee silently falls back to LLM_API_KEY and Voyage rejects it with a 401
@@ -233,12 +193,8 @@ def configure() -> None:
             "EMBEDDING_API_KEY is not set. Voyage needs its own key, separate from LLM_API_KEY."
         )
 
-    # mcp-sampling borrows the MCP host's model and needs no key. Any other provider does.
-    if os.getenv("LLM_PROVIDER") != "mcp-sampling" and not os.getenv("LLM_API_KEY"):
-        raise SystemExit(
-            "LLM_API_KEY is not set. Batch ingestion has no MCP host to sample from, "
-            "so it needs a real chat key even when the interactive path does not."
-        )
+    if not os.getenv("LLM_API_KEY"):
+        raise SystemExit("LLM_API_KEY is not set. Building the graph needs a chat model.")
 
     dimensions = int(os.environ.setdefault("EMBEDDING_DIMENSIONS", "1024"))
     if dimensions > MAX_INDEXABLE_DIMENSIONS:

@@ -23,6 +23,3 @@ uv>=0.6.3,<1.0.0
 
 asyncpg
 python-dotenv
-pyyaml
-fastapi
-uvicorn[standard]

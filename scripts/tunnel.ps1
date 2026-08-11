@@ -2,7 +2,7 @@
 # drops. Uses gcloud and the built-in Windows OpenSSH client; nothing new is installed.
 #
 #   9000 -> the Cognee MCP server, what Claude Code and Codex connect to
-#  15432 -> Postgres, what `pmb export` and `pmb sync` use
+#  15432 -> Postgres, what `pmb list` and `pmb digest` use
 #
 # 15432 rather than 5432 on purpose: the laptop may run its own Postgres on 5432, and a forward
 # onto an occupied port fails in a way that reads as a database problem.
