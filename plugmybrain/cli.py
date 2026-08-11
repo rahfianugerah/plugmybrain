@@ -67,6 +67,31 @@ def map_folder(target: Path) -> tuple[Path, Path]:
     return graph, destination
 
 
+def install_agent_commands() -> list[Path]:
+    """Copy the slash commands into Claude Code and Codex, and return what was written.
+
+    One file serves both: they share the frontmatter fields and `$ARGUMENTS`. Kept in the
+    repository rather than written straight into the home directory, so the commands are
+    versioned with the tool that they drive and survive a new machine.
+    """
+    source = config.REPO_ROOT / "agents"
+    commands = sorted(source.glob("*.md"))
+    if not commands:
+        raise SystemExit(f"no command files in {source}")
+
+    home = Path.home()
+    written: list[Path] = []
+    # Claude Code reads ~/.claude/commands; Codex reads ~/.codex/prompts. Codex calls these
+    # custom prompts and is migrating to skills, but prompts are what still yields a /command.
+    for target in (home / ".claude" / "commands", home / ".codex" / "prompts"):
+        target.mkdir(parents=True, exist_ok=True)
+        for command in commands:
+            destination = target / command.name
+            shutil.copyfile(command, destination)
+            written.append(destination)
+    return written
+
+
 def _print_ingest(report) -> None:
     print(f"dataset:  {report.dataset}")
     print(f"ingested: {report.ingested} document(s)")
@@ -118,9 +143,9 @@ def main(argv: list[str] | None = None) -> int:
     export_cmd.add_argument("--project", required=True, help="the dataset to export")
     export_cmd.add_argument("--limit", type=int, default=500, help="most-connected nodes to write")
 
-    note_cmd = sub.add_parser(
-        "note", help="write a memory note; the body is read from stdin"
-    )
+    sub.add_parser("install", help="install the /pmb slash commands into Claude Code and Codex")
+
+    note_cmd = sub.add_parser("note", help="write a memory note; the body is read from stdin")
     note_cmd.add_argument("title", help="states the thing, not the topic")
     note_cmd.add_argument("--type", default="session", choices=list(config.NOTE_TYPES))
     note_cmd.add_argument("--tags", help="comma-separated, defaults to the note type")
@@ -189,6 +214,12 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"dropped {report.dropped} less-connected node(s). Raise --limit to include them."
             )
+        return 0
+
+    if args.command == "install":
+        for path in install_agent_commands():
+            print(f"wrote: {path}")
+        print("\nRestart Claude Code and Codex; both load commands at session start.")
         return 0
 
     if args.command == "note":

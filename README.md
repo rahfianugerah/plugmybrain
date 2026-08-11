@@ -298,6 +298,27 @@ startup_timeout_sec = 60
 the VM's loopback, so the tunnel is the only way to reach it. Plain HTTP is correct rather than
 lazy: the traffic never leaves loopback on either end and SSH encrypts the hop between them.
 
+### Slash commands
+
+```bash
+pmb install     # then restart Claude Code and Codex
+```
+
+Writes the same three files to `~/.claude/commands/` and `~/.codex/prompts/`. One source works
+for both, since they share the frontmatter fields and `$ARGUMENTS`.
+
+| Command | Does |
+| :- | :- |
+| `/pmb <question>` | Recall from the memory, with the dataset passed and sources cited |
+| `/pmb-note [title]` | Summarise this session into a memory note, then ingest it |
+| `/pmb-map [path]` | Build the code map, then query it instead of grepping |
+
+They cost nothing from the Gemini or Voyage keys: the agent's own model does the work, and
+those keys are only spent during ingestion.
+
+The commands live in `agents/` in this repository rather than being written straight into your
+home directory, so they are versioned with the tool they drive and survive a new machine.
+
 `CLAUDE.md` and `AGENTS.md` in this repository are byte-identical and carry the same three
 pointers: read `graph.json` for code structure, read the vault's `memory/` for rules, and pass
 the dataset on every Cognee query. Other projects copy [[agent.template.md]] from the vault
