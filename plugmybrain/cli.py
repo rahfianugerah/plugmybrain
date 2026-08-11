@@ -102,6 +102,8 @@ def _print_ingest(report) -> None:
         print(f"          ... and {len(report.skipped) - 10} more")
     if report.estimate is not None:
         print(f"estimate: {report.estimate}")
+    for dup in report.duplicates:
+        print(f"duplicate: {dup}, ingested once")
     for created in report.indexes_created:
         print(f"indexed:  {created}")
     for small in report.indexes_skipped:

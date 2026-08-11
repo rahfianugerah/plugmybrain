@@ -360,12 +360,14 @@ pmb serve                            # the HTTP API
 The dataset is the folder's own name and is required on every read. Nothing is ever scanned
 without an explicit path.
 
-**Isolation is currently not enforced.** With `ENABLE_BACKEND_ACCESS_CONTROL=false`, which is
-what makes ingestion work at all here, cognee keeps every dataset in one shared vector
-collection and the `datasets` filter does not scope the search. A query against one project can
-return another's documents. Measured: a search of `agents`, a three-file dataset, returned a
-decision note that exists only in `curated`. Until this is resolved, the dataset argument
-records intent rather than enforcing a boundary.
+**Isolation is enforced here, not by cognee.** Cognee keeps every dataset in one vector
+collection and its `datasets` argument does not scope the search: a three-file dataset was
+measured returning a decision note from another project. So `retrieve.py` asks Postgres which
+documents belong to the dataset, over-fetches, and drops the rest before returning. Cognee's
+own multi-tenant path was tried first and fails on this setup, connecting to port 123.
+
+`mode=graph` cannot be filtered, because it returns prose rather than chunks with metadata.
+That is one more reason `chunks` is the default.
 
 ## Configuration
 

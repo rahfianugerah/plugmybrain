@@ -33,10 +33,10 @@ At `http://127.0.0.1:9000/mcp`, whether the stack runs here or on the VM behind 
 
 **Read with `recall`, always passing `datasets`.** `curated` is the vault's own rules and memory.
 
-**Known limitation: `datasets` does not actually isolate results right now.** All datasets share
-one vector collection, so a search scoped to one project can return another project's
-documents. Verified, not theoretical. Treat the dataset argument as intent, not as a boundary,
-and check the cited sources before trusting an answer.
+Isolation is enforced by `plugmybrain`, not by cognee. Cognee keeps every dataset in one vector
+collection and its own `datasets` argument does not scope the search, so membership is checked
+against Postgres and foreign documents are dropped before you see them. `mode=graph` is the
+exception: it returns prose with no per-document metadata, so it can still mix projects.
 
 ```json
 {"query": "why is there no licence", "datasets": ["curated"],

@@ -2,6 +2,7 @@
 # `cognee-ingest` container. Never co-resident with serving on a 2 GiB VM.
 from __future__ import annotations
 
+import hashlib
 import inspect
 import math
 import re
@@ -35,6 +36,7 @@ class IngestReport:
     indexes_skipped: list[str] = field(default_factory=list)
     indexes_rebuild_due: list[str] = field(default_factory=list)
     indexes_refused: list[str] = field(default_factory=list)
+    duplicates: list[str] = field(default_factory=list)
     estimate: object | None = None
 
 
@@ -177,7 +179,24 @@ async def ingest(
     if not documents:
         raise SystemExit(f"no documents found under: {', '.join(str(p) for p in paths)}")
 
+    # Two files with identical bytes make cognee build one Data row and then attach it to the
+    # dataset twice, which dies in SQLAlchemy's identity map. This project causes it on purpose:
+    # CLAUDE.md and AGENTS.md are kept byte-identical so neither agent reads a different rule.
+    report_duplicates: list[str] = []
+    seen: dict[str, Path] = {}
+    unique: list[Path] = []
+    for path in documents:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        first = seen.get(digest)
+        if first is None:
+            seen[digest] = path
+            unique.append(path)
+        else:
+            report_duplicates.append(f"{path.name} is identical to {first.name}")
+    documents = unique
+
     report = IngestReport(dataset=dataset, ingested=len(documents), skipped=skipped)
+    report.duplicates = report_duplicates
 
     # add chunks and stores; cognify is the pass that calls the model. Estimating after the
     # add and before the cognify is what makes --dry-run tell you the real cost.
