@@ -245,6 +245,25 @@ The vault view is the one to reach for when you want the knowledge graph *next t
 that produced it, since Obsidian renders generated notes and human ones in one graph. The
 standalone HTML is the one to reach for when you just want to look.
 
+## Moving to a Different Vault
+
+`PMB_VAULT` decides which vault is the brain. Switching it is not a one-line change, because
+Cognee stores the absolute path each document was ingested from.
+
+1. The new vault needs `memory/` with `memory.rules.md`, `note.template.md` and the four type
+   folders. `configure()` refuses to start without it, on purpose: a wrong path would otherwise
+   report an empty corpus, which reads as "the vault is empty" rather than "the path is wrong".
+2. It needs `graph/README.md`, and `graph/code/` plus `graph/kg/` in its `.gitignore`.
+3. **Wipe the database first: `docker compose down -v`.** The existing dataset holds paths into
+   the old vault. Mixing them leaves a corpus that half resolves, which fails later and further
+   from the cause. This already cost one rebuild when host paths from Windows got in.
+4. Only then set `PMB_VAULT` and re-ingest.
+
+One vault serves every project. Projects are isolated by **dataset name**, not by having a
+`memory/` each, so a new project needs `pmb map` and `pmb ingest` and nothing else. Splitting
+the memory per project would scatter the shared rules across repositories, which is the problem
+the vault exists to solve.
+
 ## Keeping What the Graph Found
 
 Everything under `docs/graph/` is gitignored and **regenerated**, so a note you edit there is
