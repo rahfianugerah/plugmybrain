@@ -68,16 +68,20 @@ def map_folder(target: Path) -> tuple[Path, Path]:
 
 
 def install_agent_commands() -> list[Path]:
-    """Copy the slash commands into Claude Code and Codex, and return what was written.
+    """Copy the vault's slash commands into Claude Code and Codex, and return what was written.
 
-    One file serves both: they share the frontmatter fields and `$ARGUMENTS`. Kept in the
-    repository rather than written straight into the home directory, so the commands are
-    versioned with the tool that they drive and survive a new machine.
+    One file serves both: they share the frontmatter fields and `$ARGUMENTS`. Read from the
+    vault rather than from this repository, so the standards repo owns them and switching vaults
+    switches the commands too.
     """
-    source = config.REPO_ROOT / "agents"
-    commands = sorted(source.glob("*.md"))
+    source = config.AGENTS_DIR
+    commands = sorted(source.glob("*.md")) if source.is_dir() else []
     if not commands:
-        raise SystemExit(f"no command files in {source}")
+        raise SystemExit(
+            f"no command files in {source}.\n"
+            "The commands live in the vault, so they follow whichever vault PMB_VAULT points at. "
+            "Create that folder, or set PMB_AGENTS_DIR to where yours are."
+        )
 
     home = Path.home()
     written: list[Path] = []

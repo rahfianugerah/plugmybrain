@@ -31,6 +31,11 @@ GRAPH_DIR = _repo_relative("PMB_GRAPH_DIR", REPO_ROOT / "graph")
 # The only part of the vault this project may write to. Everything above it is human-authored.
 VAULT_GENERATED = VAULT / "graph"
 
+# The slash commands live in the vault, not in this repository. They tell an agent how to work
+# here, which makes them a standard rather than part of the tool: switch the vault and every
+# project picks up that vault's commands, with nothing to copy and no second copy to drift.
+AGENTS_DIR = _repo_relative("PMB_AGENTS_DIR", VAULT / "agents")
+
 # The human control plane: rules and memory. Wins on conflict with any project dataset.
 CURATED_DATASET = "curated"
 CURATED_PATHS = (VAULT / "rules", VAULT / "memory")

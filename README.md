@@ -326,6 +326,11 @@ pmb install     # then restart Claude Code and Codex
 Writes the same three files to `~/.claude/commands/` and `~/.codex/prompts/`. One source works
 for both, since they share the frontmatter fields and `$ARGUMENTS`.
 
+**The commands live in the vault, at `<vault>/agents/`, not in this repository.** They tell an
+agent how to work, which makes them a standard rather than part of the tool. Point `PMB_VAULT`
+at a different vault and `pmb install` picks up that vault's commands, with nothing to copy and
+no second copy to drift. `PMB_AGENTS_DIR` overrides the location.
+
 | Command | Does |
 | :- | :- |
 | `/pmb <question>` | Recall from the memory, with the dataset passed and sources cited |
