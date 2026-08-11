@@ -95,3 +95,16 @@ def test_an_explicit_index_choice_is_never_overridden(kind):
 
 def test_slug_is_stable_so_a_re_digest_overwrites_rather_than_duplicates():
     assert export.slug("Loader uses Polars, not pandas") == "loader-uses-polars-not-pandas"
+
+
+def test_reset_leaves_the_hand_written_readme_in_graph(tmp_path):
+    """graph/ holds a committed README explaining the folder; only its subfolders are ours."""
+    generated = tmp_path / config.GENERATED
+    (generated / "kg").mkdir(parents=True)
+    (generated / "kg" / "node.md").write_text("#", encoding="utf-8")
+    (generated / "README.md").write_text("# Graph", encoding="utf-8")
+
+    markdown, _, _, written = manage._on_disk(tmp_path)
+    # The README is generated-area markdown but not machine-written, so it is neither digested
+    # nor counted as something a digest would rebuild.
+    assert (markdown, written) == (0, 1)

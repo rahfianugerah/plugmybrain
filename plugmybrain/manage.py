@@ -37,7 +37,7 @@ class Status:
 class ResetReport:
     scope: str
     documents: int
-    generated: Path | None
+    generated: list[Path]
     kept: Path | None
 
 
@@ -60,11 +60,17 @@ def _on_disk(target: Path) -> tuple[int, int, int, int]:
     # than a refused secret. Counting it under "skipped" would report the tool's own notes as
     # something suspicious it declined to read.
     refused = [p for p in skipped if not p.is_relative_to(generated)]
+    # Only the machine-written subfolders. A README sitting in graph/ is hand-written.
+    written = sum(
+        len(list((generated / sub).rglob("*.md")))
+        for sub in config.GENERATED_SUBDIRS
+        if (generated / sub).is_dir()
+    )
     return (
         len(included),
         len(refused),
         len(list(human.rglob("*.md"))) if human.is_dir() else 0,
-        len(list(generated.rglob("*.md"))) if generated.is_dir() else 0,
+        written,
     )
 
 
@@ -153,12 +159,16 @@ async def reset(target: Path, everything: bool = False) -> ResetReport:
             await cognee.delete(data_id=row["data_id"], dataset_id=row["dataset_id"], mode="hard")
         documents = len(rows)
 
-    if generated.is_dir():
-        shutil.rmtree(generated)
+    # The subfolders, never `graph/` itself: a hand-written README lives there and is committed.
+    removed = []
+    for sub in config.GENERATED_SUBDIRS:
+        if (generated / sub).is_dir():
+            shutil.rmtree(generated / sub)
+            removed.append(generated / sub)
 
     return ResetReport(
         scope="everything" if everything else name,
         documents=documents,
-        generated=generated,
+        generated=removed,
         kept=(target / config.HUMAN) if (target / config.HUMAN).is_dir() else None,
     )

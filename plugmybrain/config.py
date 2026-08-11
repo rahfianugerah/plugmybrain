@@ -20,9 +20,13 @@ GRAPH_DIR = (
     Path(_graph_dir) if Path(_graph_dir).is_absolute() else REPO_ROOT / (_graph_dir or "graph")
 ).resolve()
 
-# The folder's own generated area. Everything here is rebuilt by `pmb digest` and removed by
-# `pmb reset`; nothing else in the folder is ever written to.
+# The folder's own generated area. Nothing outside it is ever written to.
 GENERATED = "graph"
+
+# Only these two are machine-written. `graph/` itself usually also holds a hand-written
+# README explaining what the folder is, which is committed, so `pmb reset` removes the
+# subfolders rather than the parent. Deleting the parent would take that README with it.
+GENERATED_SUBDIRS = ("code", "kg")
 
 # The one folder `pmb reset` must never touch. It is written by hand, it is committed, and it is
 # the only reason a wiped database is a rebuild rather than a loss.

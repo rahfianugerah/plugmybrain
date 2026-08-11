@@ -165,8 +165,11 @@ def main(argv: list[str] | None = None) -> int:
         scope = "EVERY folder's memory" if args.everything else f"the memory for {target.name}"
         # Confirmed rather than assumed: this is the only destructive command, and a digest of a
         # large folder costs real money to rebuild even though nothing is truly lost.
+        generated = ", ".join(
+            str(target / config.GENERATED / sub) for sub in config.GENERATED_SUBDIRS
+        )
         if not args.yes:
-            print(f"About to delete {scope} from the database, and {target / config.GENERATED}.")
+            print(f"About to delete {scope} from the database, and {generated}.")
             print(f"{target / config.HUMAN} and every other markdown file are left alone.")
             if input("Type yes to continue: ").strip().lower() != "yes":
                 print("Nothing was deleted.")
@@ -175,7 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         report = asyncio.run(manage.reset(target, everything=args.everything))
         count = "all" if report.documents < 0 else str(report.documents)
         print(f"deleted:  {count} document(s) from the memory ({report.scope})")
-        print(f"deleted:  {report.generated}")
+        for path in report.generated:
+            print(f"deleted:  {path}")
         print(f"kept:     {report.kept if report.kept else 'every markdown file in the folder'}")
         print("\nRun `pmb digest` to build it again from the markdown.")
         return 0
