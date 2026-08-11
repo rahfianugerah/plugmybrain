@@ -45,13 +45,11 @@ docker compose -f "$PMB/compose.yaml" run --rm \
 The mount path carries the folder's name on purpose: that name IS the memory it lands in, and a
 fixed mount point would digest every folder into one shared memory that overwrites the last.
 
-**digest** reads every markdown file into the memory, builds the code map, and writes the
-knowledge graph back under `graph/` for Obsidian. On a root it does that for every child.
+**digest** chunks and embeds every markdown file, and builds the Graphify code map into the
+vault. On a root it does that for every child, brain first. There is no chat model involved and
+nothing to estimate: the only cost is Voyage embedding, which is free at this scale.
 
-Run it with `--dry-run` first when the folder is large or new, show the user the estimate, and
-wait for them to agree. It calls the model once per chunk and that is real money.
-
-**reset** deletes that memory from the database and the generated `graph/code/` and `graph/kg/`.
+**reset** deletes that memory from the database and its `graph/code/<brain>/` in the vault.
 `memory/` and every other markdown file are untouched, so a digest rebuilds everything. Add
 `--all` for every folder. **Confirm with the user first**, then pass `--yes`, since the
 container has no terminal to prompt on.

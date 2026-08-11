@@ -78,7 +78,7 @@ async def status(target: Path, scan: bool = True) -> Status:
     counting every child's, and the sum of things that were digested separately is not a number
     that means anything.
     """
-    config.configure(chat=False)
+    config.configure()
 
     target = target.resolve()
     name = config.namespace(target)
@@ -137,7 +137,7 @@ async def reset(target: Path, everything: bool = False) -> ResetReport:
     `memory/` is what a person wrote and `pmb digest` can rebuild everything else from it, so
     this deletes the database rows and this brain's generated notes in the vault, and stops.
     """
-    config.configure(chat=False)
+    config.configure()
     import cognee
 
     target = target.resolve()

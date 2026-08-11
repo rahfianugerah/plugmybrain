@@ -1,4 +1,4 @@
-# The single entry point. Three commands, and printing lives here so every other module
+# The single entry point. Four commands, and printing lives here so every other module
 # returns data instead.
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def map_code(target: Path) -> Path | None:
     return destination
 
 
-async def digest(target: Path, dry_run: bool = False) -> None:
+async def digest(target: Path) -> None:
     """Digest one folder, or every child of a root."""
     from plugmybrain import bootstrap
 
@@ -64,19 +64,18 @@ async def digest(target: Path, dry_run: bool = False) -> None:
         print(f"root:     {target}")
         print(f"children: {', '.join(path.name for path in folders)}\n")
         for path in folders:
-            await digest_one(path, dry_run=dry_run)
+            await digest_one(path)
             print()
         return
 
-    await digest_one(target, dry_run=dry_run)
+    await digest_one(target)
 
 
-async def digest_one(target: Path, dry_run: bool = False) -> None:
-    from plugmybrain import export as export_module
+async def digest_one(target: Path) -> None:
     from plugmybrain import ingest as ingest_module
 
     name = config.namespace(target)
-    report = await ingest_module.ingest(target, dataset=name, dry_run=dry_run)
+    report = await ingest_module.ingest(target, dataset=name)
 
     print(f"folder:   {target}")
     print(f"memory:   {name}")
@@ -89,11 +88,6 @@ async def digest_one(target: Path, dry_run: bool = False) -> None:
     for dup in report.duplicates:
         print(f"duplicate: {dup}, digested once")
 
-    if dry_run:
-        print(f"estimate: {report.estimate}")
-        print("\nNothing was spent. Drop --dry-run to digest for real.")
-        return
-
     for created in report.indexes_created:
         print(f"indexed:  {created}")
     for small in report.indexes_skipped:
@@ -105,11 +99,6 @@ async def digest_one(target: Path, dry_run: bool = False) -> None:
 
     code = map_code(target)
     print(f"code map: {code if code else 'none, no source files found'}")
-
-    graph = await export_module.export(name)
-    print(f"graph:    {graph.written} of {graph.total} note(s) in {graph.directory}")
-    if graph.dropped:
-        print(f"          {graph.dropped} less-connected node(s) dropped")
     print(f"\nOpen {config.DOCS} in Obsidian to see it.")
 
 
@@ -167,10 +156,9 @@ def main(argv: list[str] | None = None) -> int:
     target_argument(init_cmd)
 
     digest_cmd = sub.add_parser(
-        "digest", help="turn a folder's markdown into memory, a code map and a graph"
+        "digest", help="turn a folder's markdown into memory, plus a code map"
     )
     target_argument(digest_cmd)
-    digest_cmd.add_argument("--dry-run", action="store_true", help="estimate the cost and stop")
 
     reset_cmd = sub.add_parser("reset", help="throw away the derived memory, never the markdown")
     target_argument(reset_cmd)
@@ -202,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "digest":
-        asyncio.run(digest(target, dry_run=args.dry_run))
+        asyncio.run(digest(target))
         return 0
 
     if args.command == "list":

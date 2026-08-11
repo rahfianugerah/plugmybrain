@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,9 @@ HNSW_EF_SEARCH = 64
 
 # pgvector's own sizing guidance: lists = rows / 1000 up to a million rows.
 IVFFLAT_ROWS_PER_LIST = 1000
+
+# Characters per chunk. Small enough that a hit points at a paragraph rather than a page.
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1500"))
 
 # `WITH (lists='100')` inside pg_indexes.indexdef, so a stale index can be spotted.
 _LISTS = re.compile(r"lists\s*=\s*'?(\d+)'?")
@@ -145,13 +149,49 @@ async def ensure_vector_index() -> IngestReport:
     return report
 
 
-async def ingest(target: Path, dataset: str, dry_run: bool = False) -> IngestReport:
+async def _pipeline():
+    """Cognee's own pipeline with the one step that calls a chat model taken out.
+
+    Its default is five tasks and cognee's own comments name what each does:
+
+        classify_documents              EXTRACT: raw Data into typed Document objects
+        extract_chunks_from_documents   EXTRACT: split Documents into semantic chunks
+        extract_graph_and_summarize     COGNIFY: LLM-extract entities, LLM-summarize each chunk
+        add_data_points                 LOAD: persist nodes, edges and embeddings
+        extract_dlt_fk_edges            LOAD: foreign-key edges
+
+    Only the third one calls a chat model, and it is the whole bill: it emits structured JSON
+    per chunk, so output tokens dominate. Dropping it leaves chunking and embedding, which is
+    all that retrieval needs, and takes the chat model out of this project entirely.
+
+    What is lost is the entity graph, and with it any question answered by traversing between
+    documents rather than matching text in one. That is a real capability, priced at roughly
+    ten dollars per corpus, and this trades it away deliberately.
+    """
+    from cognee.modules.chunking.TextChunker import TextChunker
+    from cognee.modules.pipelines.tasks.task import Task
+    from cognee.tasks.documents import classify_documents, extract_chunks_from_documents
+    from cognee.tasks.storage import add_data_points
+
+    # Not cognee's get_max_chunk_tokens(): it sizes a chunk at half the CHAT model's context
+    # window, which is a number with no meaning once there is no chat model. CHUNK_SIZE is a
+    # setting that already exists and the only ceiling left that matters is the embedding
+    # model's, which 1500 is comfortably under.
+    return [
+        Task(classify_documents),
+        Task(extract_chunks_from_documents, max_chunk_size=CHUNK_SIZE, chunker=TextChunker),
+        Task(add_data_points, task_config={"batch_size": 2000}),
+    ]
+
+
+async def ingest(target: Path, dataset: str) -> IngestReport:
     """Ingest every markdown file under `target` into `dataset`, then index it.
 
     Idempotent: cognee loads incrementally, and ensure_vector_index only creates what is
     missing.
     """
     import cognee
+    from cognee.modules.pipelines import run_pipeline
 
     if not target.is_dir():
         raise SystemExit(f"not a directory: {target}")
@@ -182,14 +222,19 @@ async def ingest(target: Path, dataset: str, dry_run: bool = False) -> IngestRep
     report = IngestReport(dataset=dataset, ingested=len(documents), skipped=skipped)
     report.duplicates = report_duplicates
 
-    # add chunks and stores; cognify is the pass that calls the model. Estimating after the
-    # add and before the cognify is what makes --dry-run tell you the real cost.
     await cognee.add([str(path) for path in documents], dataset_name=dataset)
-    if dry_run:
-        report.estimate = await cognee.cognify(datasets=[dataset], dry_run=True)
-        return report
 
-    await cognee.cognify(datasets=[dataset])
+    # run_pipeline rather than cognify, because cognify hardcodes its five tasks and the third
+    # is the chat model. There is no flag for this; the task list is the flag.
+    # An async generator, not a coroutine: it yields a status per dataset as it goes. Drained
+    # rather than awaited, so the run is actually finished before the index is built on it.
+    async for _ in run_pipeline(
+        tasks=await _pipeline(),
+        datasets=[dataset],
+        pipeline_name="pmb_pipeline",
+        incremental_loading=True,
+    ):
+        pass
 
     indexes = await ensure_vector_index()
     report.indexes_created = indexes.indexes_created

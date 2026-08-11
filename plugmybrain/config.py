@@ -33,9 +33,9 @@ DOCS = (
 
 GENERATED = "graph"
 
-# Only these two are machine-written. `graph/` itself also holds a hand-written README, which is
-# committed, so `pmb reset` removes what is under the subfolders rather than the parent.
-GENERATED_SUBDIRS = ("code", "kg")
+# The machine-written subfolder. `graph/` itself also holds a hand-written README, which is
+# committed, so `pmb reset` removes what is under it rather than the parent.
+GENERATED_SUBDIRS = ("code",)
 
 # The one folder `pmb reset` must never touch. It is written by hand, it is committed, and it is
 # the only reason a wiped database is a rebuild rather than a loss.
@@ -165,15 +165,14 @@ def db_connect_kwargs() -> dict[str, object]:
     }
 
 
-def configure(chat: bool = True) -> None:
+def configure() -> None:
     """Load `.env`, set the invariants, and fail fast on a bad setup.
 
     Must run before `import cognee`, because cognee reads its configuration from the
     environment at import time.
 
-    `chat=False` for everything except `pmb digest`. A chat model is what turns markdown into a
-    graph, and it runs once per digest; reading never calls one. That is the whole cost model:
-    an agent asking a question spends nothing from these keys.
+    There is no chat model to configure. The only model this project uses is the embedding
+    model, and it runs at digest time; a query embeds itself and reads Postgres.
     """
     from dotenv import load_dotenv
 
@@ -206,19 +205,10 @@ def configure(chat: bool = True) -> None:
             f"missing in .env: {', '.join(missing)}. Copy .env.example and fill it in."
         )
 
-    # Voyage is embeddings only, so the embedding key is separate from the chat key. Without
-    # this check cognee silently falls back to LLM_API_KEY and Voyage rejects it with a 401
-    # that names the wrong vendor.
+    # The only key this project needs. Voyage is an embedding vendor and has no chat model,
+    # which is the point: there is nothing here that could run up a chat bill.
     if not os.getenv("EMBEDDING_API_KEY"):
-        raise SystemExit(
-            "EMBEDDING_API_KEY is not set. Voyage needs its own key, separate from LLM_API_KEY."
-        )
-
-    if chat and not os.getenv("LLM_API_KEY"):
-        raise SystemExit(
-            "LLM_API_KEY is not set. Turning markdown into a graph is the one thing that needs "
-            "a chat model, and it runs once per digest. Reading never calls one."
-        )
+        raise SystemExit("EMBEDDING_API_KEY is not set. Voyage embeds the markdown.")
 
     dimensions = int(os.environ.setdefault("EMBEDDING_DIMENSIONS", "1024"))
     if dimensions > MAX_INDEXABLE_DIMENSIONS:

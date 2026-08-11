@@ -68,10 +68,9 @@ def build():
 
 
 def main() -> None:
-    # configure() before cognee is imported anywhere, because cognee reads its settings from the
-    # environment at import time. models=False: this server only reads, so it needs the database
-    # and the embedding key, never a chat key.
-    config.configure(chat=False)
+    # configure() before cognee is imported anywhere, because cognee reads its settings from
+    # the environment at import time.
+    config.configure()
     os.environ.setdefault("EMBEDDING_DIMENSIONS", "1024")
     build().run(
         transport="streamable-http",

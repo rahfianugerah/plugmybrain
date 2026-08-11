@@ -49,10 +49,8 @@ _GRAPH_README = """# Graph
 Every brain on this machine generates into here, one folder per brain. `pmb digest` writes it
 and `pmb reset` deletes it, so editing anything below this file is wasted work.
 
-| Folder | Holds |
-| :- | :- |
-| `code/<brain>/` | The Graphify code map: hubs, connections, and the questions worth asking |
-| `kg/<brain>/` | The Cognee knowledge graph as `[[wikilink]]` notes, for the graph view |
+`code/<brain>/` holds the Graphify code map: the hubs, the connections, and the questions worth
+asking about a codebase, extracted by tree-sitter with no model involved at all.
 
 It lands here rather than inside each project so no repository grows a `graph/` nobody asked
 for, and so one vault shows everything. A digested folder is only ever read.
@@ -63,7 +61,7 @@ When a generated note turns out to be worth keeping, move it into `memory/` your
 down why. A kept note with no reason written down is a machine's guess with a date on it.
 """
 
-_GITIGNORE = ("graph/code/", "graph/kg/")
+_GITIGNORE = ("graph/code/",)
 
 
 @dataclass

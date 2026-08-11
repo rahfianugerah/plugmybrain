@@ -8,15 +8,15 @@
 ![Status](https://img.shields.io/badge/Status-WIP-D29922)
 
 A plug-and-play memory for coding agents. Point it at a folder of markdown and that folder
-becomes a brain: a knowledge graph the agent queries over MCP, a code map it reads instead of
-grepping, and more markdown written into your vault so you can see the whole thing.
+becomes a brain the agent searches over MCP, plus a code map it reads instead of grepping the
+tree. **No chat model anywhere in it**: the agent asking the question already has one.
 
 It exists because an agent with no memory relearns the same context every session and pays for
 that in tokens every time.
 
 **Obsidian is required.** It is the viewer, and there is no other. Everything generated is
-markdown in one vault, so the graph a model built sits next to the notes a person wrote and
-renders in the same graph view.
+markdown in one vault, so the code map sits next to the notes a person wrote and renders in the
+same graph view.
 
 ## Four Commands
 
@@ -26,12 +26,11 @@ memory is called.
 | Command | Does |
 | :- | :- |
 | `pmb init root\|brain` | Gives a folder its role, and wires Claude Code and Codex to the brain. Nothing else to set up by hand |
-| `pmb digest` | Reads every markdown file into Cognee, builds the Graphify code map, and writes the knowledge graph into the vault as linked markdown |
+| `pmb digest` | Chunks and embeds every markdown file, and builds the Graphify code map into the vault |
 | `pmb reset` | Deletes that memory from the database and its generated notes. **Every markdown file survives**, so a digest rebuilds it |
 | `pmb list` | What the database holds, every memory in it, and how the folder's markdown count compares with what was actually digested |
 
-Each takes an optional folder and defaults to the current one. `pmb digest --dry-run` estimates
-the cost before spending anything.
+Each takes an optional folder and defaults to the current one.
 
 **Asking questions needs no command.** The memory is connected as an MCP server, so a question
 is answered by the agent calling it directly. In an agent write `/pmb digest`; in a terminal it
@@ -42,9 +41,9 @@ session to read from a different brain from here on. It changes nothing on disk 
 nothing; one stack holds every memory, and this is which one gets asked.
 
 **This is built for coding agents.** Claude Code, Codex, opencode, and anything else speaking
-MCP. It is not a chatbot back end, and the chat model it uses exists for one job: turning
-markdown into a graph, once, when you digest. Reading never calls a model, so an agent asking a
-question costs nothing.
+MCP. It is not a chatbot back end, and **there is no chat model in it at all** — no
+`LLM_API_KEY`, nothing that can run up a bill. The agent asking the question already has a
+model; this only has to find the right passages. See `## No Chat Model`.
 
 ## Two Roles
 
@@ -69,6 +68,41 @@ cd C:/Users/you/docs            &&  pmb init brain .       # a standalone brain
 A folder needs neither role. `pmb digest some-project` works on anything with markdown in it;
 the roles only exist so a parent can be digested in one go.
 
+## No Chat Model
+
+Cognee's default pipeline is five steps, and its own source comments name them:
+
+```text
+classify_documents              EXTRACT: raw Data into typed Document objects
+extract_chunks_from_documents   EXTRACT: split Documents into semantic chunks
+extract_graph_and_summarize     COGNIFY: LLM-extract entities, LLM-summarize each chunk
+add_data_points                 LOAD: persist nodes, edges and embeddings
+extract_dlt_fk_edges            LOAD: foreign-key edges
+```
+
+**PlugMyBrain runs the first, second and fourth.** Only the third calls a chat model, and it
+was the entire bill: it emits structured JSON per chunk, so output tokens dominate, and a 3.6MB
+corpus cost roughly $9 on `gemini-3.5-flash` — a model whose name says flash and whose output
+price is $9.00 per million, nearly what 2.5-pro charges.
+
+`cognify()` hardcodes those five, so this calls `run_pipeline` with its own list instead. There
+is no flag; the task list is the flag.
+
+| Cost | Before | Now |
+| :- | :- | :- |
+| Chat model at digest | ~$9 per 3.6MB | **none** |
+| Embedding at digest | Voyage, inside the free tier at this scale | unchanged |
+| Anything per query | none | none |
+
+**What was lost:** the entity graph, and with it any question answered by traversing between
+documents rather than matching text within one. Retrieval, which is what a coding agent needs,
+is untouched — measured on a folder digested with `LLM_API_KEY` blanked out entirely:
+
+```text
+recall "why not pandas for the loader" -> the-loader-uses-polars.md
+recall "which ports are exposed"       -> ports-are-published-on-loopback.md
+```
+
 ## Nothing Is Written Into a Digested Folder
 
 A folder you digest is only ever **read**. Everything generated lands in one Obsidian vault,
@@ -79,7 +113,6 @@ your-folder/                      the vault (PMB_DOCS, default ../docs)
   .pmb      root or brain           graph/
   memory/   human-authored            README.md          yours, survives a reset
   ...       every other .md           code/<brain>/      the Graphify map
-                                      kg/<brain>/        the Cognee knowledge graph
 ```
 
 Eighteen service repositories do not each need a `graph/` nobody asked for, and the point of an
@@ -105,16 +138,8 @@ pip install -e .
 cp .env.example .env
 ```
 
-Two keys, from different vendors: `EMBEDDING_API_KEY` from Voyage and `LLM_API_KEY` from
-whichever chat provider you uncomment. Also set `DB_PASSWORD`.
-
-**The chat key is spent by `digest` and by nothing else.** Cognify makes two model calls per
-chunk, one extracting entities and relations as structured JSON and one summarising, so it is
-the *output* price that decides the bill. Compare on that, not on the family name: measured
-against a 199 KB folder and scaled to 3.6 MB, `gpt-5-nano` costs $0.35, `gemini-2.0-flash`
-$0.48, `gpt-5-mini` $1.76, `claude-haiku-4-5` $5.37, and `gemini-3.5-flash` $8.89 — that last
-one charges $9.00 per million output tokens, nearly what 2.5-pro does. `gpt-5-mini` is the
-sensible default. Reading calls no model at all.
+One key: `EMBEDDING_API_KEY` from Voyage. Also set `DB_PASSWORD`. There is no chat key, and if
+your `.env` still carries `LLM_API_KEY` you can delete the line; nothing reads it.
 
 **3. Database.** PostgreSQL 18 with pgvector. Relational, vector and graph in one container.
 
@@ -145,7 +170,6 @@ both agents afterwards. There is nothing else to configure.
 
 ```bash
 FOLDER=C:/Users/you/maharum
-docker compose run --rm -v "$FOLDER:/w/maharum" pmb digest /w/maharum --dry-run
 docker compose run --rm -v "$FOLDER:/w/maharum" pmb digest /w/maharum
 ```
 
@@ -159,8 +183,8 @@ resolve afterwards, which costs a `docker compose down -v`.
 be called `maharum` rather than the mount point. A fixed mount would erase the name and every
 folder would be digested into one shared memory that overwrites the last.
 
-**6. Look at it.** Open the **vault** in Obsidian, not the project. `graph/kg/<brain>/` is the
-knowledge graph as linked notes, sitting beside the `memory/` notes that produced it.
+**6. Look at it.** Open the **vault** in Obsidian, not the project. `graph/code/<brain>/` is the
+code map, sitting beside the `memory/` notes a person wrote.
 
 ## The MCP Server
 
@@ -285,7 +309,6 @@ Every variable the project reads. Names only; see [[env.rules.md]].
 | `EMBEDDING_DIMENSIONS` | Yes | `1024`. Above 2000 the process refuses to start |
 | `EMBEDDING_API_KEY` | Yes | Voyage key. Separate from the chat key |
 | `EMBEDDING_ENDPOINT` | If Atlas | Only for a MongoDB Atlas key. A `dash.voyageai.com` key must leave it unset |
-| `LLM_PROVIDER` `LLM_MODEL` `LLM_API_KEY` | Yes | The chat model that builds the graph |
 | `PMB_DOCS` | No | The one Obsidian vault every brain generates into. Defaults to the sibling `docs` checkout |
 | `PMB_GRAPH_DIR` | No | Where Graphify's raw `graph.json` lands. Defaults to `graph/` in this repo |
 | `POOL_ARGS` `VECTOR_POOL_ARGS` | No | Connection pool sizing |
@@ -343,16 +366,16 @@ pasted into an ordinary `.md` still gets through.
 
 - **Only markdown is digested.** Obsidian is the viewer and markdown is the substrate, so PDF,
   docx and csv are not read. Convert first if you need them.
-- **A chat model is required to digest, and there is no way around it.** Cognify is what turns
-  markdown into a graph, and extraction is a model call. It runs once per digest and never on a
-  query, so the cost is one-off per corpus rather than per question, but "no LLM key at all"
-  would mean no Cognee and therefore no retrieval.
+- **There is no entity graph.** Retrieval matches text within a document. A question whose
+  answer needs traversing *between* documents — "which services depend on the thing that
+  changed" — is not answered by `recall`. Graphify's code map covers that for code; for prose
+  it is a real gap, and it is the price of having no chat model.
 - **The graph store is a demo feature.** Postgres-as-graph is released by Cognee as a demo; the
   production version is licensed. It is used here because one database holds relational, vector
   and graph at once. If it proves unstable, `GRAPH_DATABASE_PROVIDER=kuzu` works locally with
   no other change.
-- **The embedding model is locked to the corpus.** Swapping the chat model is free. Swapping
-  `EMBEDDING_MODEL` or `EMBEDDING_DIMENSIONS` means re-embedding everything.
+- **The embedding model is locked to the corpus.** Changing `EMBEDDING_MODEL` or
+  `EMBEDDING_DIMENSIONS` means re-embedding everything.
 - **1024 dimensions is a ceiling, not a preference.** pgvector will not index a `vector` column
   wider than 2000, by HNSW or IVFFlat. It does not fail loudly; it just leaves every search
   doing a sequential scan. `config.py` refuses to start above that.

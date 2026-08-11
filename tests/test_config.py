@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from plugmybrain import bootstrap, config, export, ingest, manage
+from plugmybrain import bootstrap, config, ingest, manage
 
 
 def test_namespace_is_the_lowercased_directory_name():
@@ -21,7 +21,7 @@ def test_generated_path_refuses_to_escape():
     # The one that matters: `memory/` is human-authored and sits in the same vault, so a
     # rebuild that could climb out of graph/ could overwrite a note somebody wrote.
     with pytest.raises(ValueError):
-        config.generated_path("kg", "../../memory", "stolen.md")
+        config.generated_path("code", "../../memory", "stolen.md")
     with pytest.raises(ValueError):
         config.generated_path("memory", "anything")
 
@@ -40,13 +40,13 @@ def test_secret_directories_are_excluded(directory):
 
 
 def test_the_generated_area_is_never_digested_back_into_itself(tmp_path):
-    assert config.is_excluded(Path("/project") / config.GENERATED / "kg" / "node.md")
+    assert config.is_excluded(Path("/project") / config.GENERATED / "code" / "report.md")
 
     # And it is not reported as a refused secret either. The vault holds both the notes to
     # digest and the notes a digest produced, so "skipped" would otherwise accuse the tool's
     # own output of looking like a leaked key.
-    (tmp_path / config.GENERATED / "kg").mkdir(parents=True)
-    (tmp_path / config.GENERATED / "kg" / "node.md").write_text("#", encoding="utf-8")
+    (tmp_path / config.GENERATED / "code").mkdir(parents=True)
+    (tmp_path / config.GENERATED / "code" / "report.md").write_text("#", encoding="utf-8")
     (tmp_path / "real.md").write_text("#", encoding="utf-8")
     included, skipped = config.collect_documents(tmp_path)
     assert [p.name for p in included] == ["real.md"]
@@ -77,10 +77,10 @@ def test_the_counts_read_generated_notes_from_the_vault(tmp_path, monkeypatch):
     (project / "README.md").write_text("#", encoding="utf-8")
     (project / config.HUMAN / "a-decision.md").write_text("#", encoding="utf-8")
 
-    vault = tmp_path / "vault"
-    (vault / config.GENERATED / "kg" / "some-service").mkdir(parents=True)
-    (vault / config.GENERATED / "kg" / "some-service" / "node.md").write_text("#", "utf-8")
-    monkeypatch.setattr(config, "DOCS", vault)
+    vault = tmp_path / "vault" / config.GENERATED / "code" / "some-service"
+    vault.mkdir(parents=True)
+    (vault / "GRAPH_REPORT.md").write_text("#", encoding="utf-8")
+    monkeypatch.setattr(config, "DOCS", tmp_path / "vault")
 
     markdown, skipped, human, generated = manage._on_disk(project)
 
@@ -108,10 +108,6 @@ def test_auto_picks_exact_until_an_index_would_actually_help(rows, expected):
 def test_an_explicit_index_choice_is_never_overridden(kind):
     assert ingest.choose_index(50, kind=kind) == kind
     assert ingest.choose_index(5_000_000, kind=kind) == kind
-
-
-def test_slug_is_stable_so_a_re_digest_overwrites_rather_than_duplicates():
-    assert export.slug("Loader uses Polars, not pandas") == "loader-uses-polars-not-pandas"
 
 
 def test_a_root_digests_its_brain_before_anything_else(tmp_path, monkeypatch):
@@ -154,4 +150,4 @@ def test_init_scaffolds_a_brain_without_overwriting_what_is_there(tmp_path, monk
     # Nothing generated is written into the brain: a digested folder is only ever read.
     assert not (brain / config.GENERATED).exists()
     ignored = (vault / ".gitignore").read_text(encoding="utf-8")
-    assert "node_modules/" in ignored and "graph/kg/" in ignored
+    assert "node_modules/" in ignored and "graph/code/" in ignored
