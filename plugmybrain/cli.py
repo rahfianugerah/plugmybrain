@@ -51,12 +51,30 @@ def map_code(target: Path) -> Path | None:
 
 
 async def digest(target: Path, dry_run: bool = False) -> None:
+    """Digest one folder, or every child of a root."""
+    from plugmybrain import bootstrap
+
+    config.configure()
+
+    if bootstrap.role_of(target) == "root":
+        folders = bootstrap.children(target)
+        if not folders:
+            raise SystemExit(f"no child folder under {target} holds any markdown.")
+        print(f"root:     {target}")
+        print(f"children: {', '.join(path.name for path in folders)}\n")
+        for path in folders:
+            await digest_one(path, dry_run=dry_run)
+            print()
+        return
+
+    await digest_one(target, dry_run=dry_run)
+
+
+async def digest_one(target: Path, dry_run: bool = False) -> None:
     from plugmybrain import export as export_module
     from plugmybrain import ingest as ingest_module
 
-    config.configure()
     name = config.namespace(target)
-
     report = await ingest_module.ingest(target, dataset=name, dry_run=dry_run)
 
     print(f"folder:   {target}")
@@ -94,7 +112,7 @@ async def digest(target: Path, dry_run: bool = False) -> None:
     print(f"\nOpen {target} in Obsidian to see it.")
 
 
-def _print_status(status) -> None:
+def _print_folder(status) -> None:
     print(f"folder:    {status.target}")
     print(f"memory:    {status.name}")
     print()
@@ -106,14 +124,25 @@ def _print_status(status) -> None:
     if status.markdown != status.ingested:
         print(f"  -> {status.markdown - status.ingested} not digested. Run `pmb digest`.")
     print()
+
+
+def _print_database(status, highlight: set[str]) -> None:
     print(f"database:  {status.database} ({status.size}), {status.chunks} chunk(s) embedded")
     if not status.datasets:
         print("           empty. Nothing has been digested yet.")
         return
     width = max(len(d.name) for d in status.datasets)
     for row in status.datasets:
-        here = "  <- this folder" if row.name == status.name else ""
+        here = "  <-" if row.name in highlight else ""
         print(f"           {row.name:<{width}}  {row.documents:>4} doc(s)  {row.created}{here}")
+
+
+def _print_child(status) -> None:
+    """One line per child of a root. The gap between written and digested is the whole point."""
+    gap = "" if status.markdown == status.ingested else f"  ({status.markdown} not digested)"
+    if status.markdown == status.ingested and status.markdown:
+        gap = "  up to date"
+    print(f"  {status.name:<26} {status.ingested:>4} of {status.markdown:>4} markdown{gap}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -127,6 +156,14 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument(
             "target", type=Path, nargs="?", default=Path.cwd(), help="the folder, default here"
         )
+
+    init_cmd = sub.add_parser(
+        "init", help="give a folder its role and wire the agents to the brain"
+    )
+    init_cmd.add_argument(
+        "role", choices=["root", "brain"], help="root holds many projects; brain holds the rules"
+    )
+    target_argument(init_cmd)
 
     digest_cmd = sub.add_parser(
         "digest", help="turn a folder's markdown into memory, a code map and a graph"
@@ -149,39 +186,75 @@ def main(argv: list[str] | None = None) -> int:
     if not target.is_dir():
         raise SystemExit(f"not a directory: {target}")
 
+    if args.command == "init":
+        from plugmybrain import bootstrap
+
+        report = bootstrap.init(target, args.role)
+        print(f"{report.target} is now a {report.role}.")
+        for path in report.created:
+            print(f"created:  {path}")
+        for wired in report.wired:
+            print(f"wired:    {wired}")
+        for warning in report.warnings:
+            print(f"WARNING:  {warning}")
+        print("\nRestart Claude Code and Codex; both load commands and servers at start.")
+        return 0
+
     if args.command == "digest":
         asyncio.run(digest(target, dry_run=args.dry_run))
         return 0
 
     if args.command == "list":
-        from plugmybrain import manage
+        from plugmybrain import bootstrap, manage
 
-        _print_status(asyncio.run(manage.status(target)))
+        if bootstrap.role_of(target) == "root":
+            folders = bootstrap.children(target)
+            print(f"root:      {target}\n")
+            names = set()
+            for path in folders:
+                child = asyncio.run(manage.status(path))
+                _print_child(child)
+                names.add(child.name)
+            print()
+            _print_database(asyncio.run(manage.status(target, scan=False)), names)
+            return 0
+
+        status = asyncio.run(manage.status(target))
+        _print_folder(status)
+        _print_database(status, {status.name})
         return 0
 
     if args.command == "reset":
-        from plugmybrain import manage
+        from plugmybrain import bootstrap, manage
 
-        scope = "EVERY folder's memory" if args.everything else f"the memory for {target.name}"
+        folders = (
+            bootstrap.children(target)
+            if bootstrap.role_of(target) == "root" and not args.everything
+            else [target]
+        )
+        if args.everything:
+            scope = "EVERY folder's memory in the database"
+        elif len(folders) > 1:
+            scope = f"the memory for {len(folders)} folder(s) under {target.name}"
+        else:
+            scope = f"the memory for {target.name}"
+
         # Confirmed rather than assumed: this is the only destructive command, and a digest of a
         # large folder costs real money to rebuild even though nothing is truly lost.
-        generated = ", ".join(
-            str(target / config.GENERATED / sub) for sub in config.GENERATED_SUBDIRS
-        )
         if not args.yes:
-            print(f"About to delete {scope} from the database, and {generated}.")
-            print(f"{target / config.HUMAN} and every other markdown file are left alone.")
+            print(f"About to delete {scope}, and the generated graph/ under each.")
+            print("Every memory/ folder and every other markdown file are left alone.")
             if input("Type yes to continue: ").strip().lower() != "yes":
                 print("Nothing was deleted.")
                 return 1
 
-        report = asyncio.run(manage.reset(target, everything=args.everything))
-        count = "all" if report.documents < 0 else str(report.documents)
-        print(f"deleted:  {count} document(s) from the memory ({report.scope})")
-        for path in report.generated:
-            print(f"deleted:  {path}")
-        print(f"kept:     {report.kept if report.kept else 'every markdown file in the folder'}")
-        print("\nRun `pmb digest` to build it again from the markdown.")
+        for folder in folders:
+            report = asyncio.run(manage.reset(folder, everything=args.everything))
+            count = "all" if report.documents < 0 else str(report.documents)
+            print(f"deleted:  {count} document(s) from the memory ({report.scope})")
+            for path in report.generated:
+                print(f"deleted:  {path}")
+        print("\nEvery markdown file is untouched. Run `pmb digest` to build it again.")
         return 0
 
     return 1

@@ -18,23 +18,47 @@ that in tokens every time.
 produces is markdown in the folder you pointed it at, so the folder opens as a vault and the
 generated graph sits next to the notes that produced it.
 
-## Three Commands
+## Four Commands
 
 That is the whole surface. The folder you point at is the memory, and its name is what the
 memory is called.
 
 | Command | Does |
 | :- | :- |
+| `pmb init root\|brain` | Gives a folder its role, and wires Claude Code and Codex to the brain. Nothing else to set up by hand |
 | `pmb digest` | Reads every markdown file into Cognee, builds the Graphify code map, and writes the knowledge graph back into `graph/` as linked markdown |
-| `pmb reset` | Deletes that memory from the database and removes `graph/`. **Every markdown file survives**, so a digest rebuilds it |
+| `pmb reset` | Deletes that memory from the database and the generated `graph/code/` and `graph/kg/`. **Every markdown file survives**, so a digest rebuilds it |
 | `pmb list` | What the database holds, every memory in it, and how the folder's markdown count compares with what was actually digested |
 
 Each takes an optional folder and defaults to the current one. `pmb digest --dry-run` estimates
 the cost before spending anything.
 
 **Asking questions needs no command.** The memory is connected to Claude Code and Codex as an
-MCP server, so a question is answered by the agent calling it directly. `/pmb` is only for the
-three actions above.
+MCP server, so a question is answered by the agent calling it directly. In an agent write
+`/pmb digest`; in a terminal or a chatbot it is just `pmb digest`.
+
+## Two Roles
+
+`pmb init` writes a one-word `.pmb` file naming the folder's role. It lives in the folder rather
+than in a config file under your home directory, because the container only ever sees the
+folder, and it is committed, so a clone on another machine already knows the layout.
+
+| Role | Is | Digested as |
+| :- | :- | :- |
+| `brain` | The rules and memory folder, like `docs/` or `docs-standard/` | One memory. Scaffolded with `memory/` and `graph/` if they are missing |
+| `root` | A parent holding many projects, like `maharum/` | Every child that has markdown, **brain first**, each its own memory |
+
+Brain first because everything else is read against the rules, so a run that stops halfway
+still leaves you a standard rather than a pile of code with nothing to judge it by.
+
+```bash
+cd C:/Users/you/maharum         &&  pmb init root .        # the parent
+cd C:/Users/you/maharum/docs-standard && pmb init brain .  # its rules
+cd C:/Users/you/docs            &&  pmb init brain .       # a standalone brain
+```
+
+A folder needs neither role. `pmb digest some-project` works on anything with markdown in it;
+the roles only exist so a parent can be digested in one go.
 
 ## Folder Layout
 
@@ -42,13 +66,14 @@ Any folder works. These two names are the only ones the tool treats specially:
 
 ```text
 your-folder/
+  .pmb         one word: root or brain. Written by init, committed
   memory/      human-authored. Never touched by reset. This is the memory
-  graph/       generated. Rebuilt by digest, deleted by reset. Gitignore it
+  graph/       generated. code/ and kg/ are rebuilt by digest and deleted by reset
   ...          every other .md file, digested as-is
 ```
 
-`memory/` is optional. Without it the folder still digests; you just have nothing that survives
-a reset except the markdown you wrote elsewhere in it.
+`graph/README.md` is yours and survives a reset; only `graph/code/` and `graph/kg/` are the
+machine's.
 
 ## Setup
 
@@ -83,58 +108,53 @@ start on Cognee's embedded SQLite defaults and quietly serve the wrong database.
 `compose.override.yaml` is picked up automatically on a laptop and only moves Postgres to port
 15432, because a development machine usually already owns 5432.
 
-**4. Digest something.**
+**4. Tell it what your folders are, and let it wire the agents.**
 
 ```bash
-FOLDER=C:/Users/you/notes
-docker compose run --rm -v "$FOLDER:/w/notes" pmb digest /w/notes --dry-run
-docker compose run --rm -v "$FOLDER:/w/notes" pmb digest /w/notes
+cd C:/Users/you/maharum && pmb init root .
+cd docs-standard        && pmb init brain .
 ```
+
+`init` runs on the host, not in the container: it registers the MCP server with Claude Code and
+Codex and writes the `/pmb` slash command with this checkout's path already filled in. Restart
+both agents afterwards. There is nothing else to configure.
+
+**5. Digest.**
+
+```bash
+FOLDER=C:/Users/you/maharum
+docker compose run --rm -v "$FOLDER:/w/maharum" pmb digest /w/maharum --dry-run
+docker compose run --rm -v "$FOLDER:/w/maharum" pmb digest /w/maharum
+```
+
+On a root that walks every child. On any other folder it digests just that one.
 
 **Always run in the container.** `pmb` on the host hangs on Cognee's subprocess database
 workers on Windows, and a killed run stores host paths in Postgres that no container can
 resolve afterwards, which costs a `docker compose down -v`.
 
 **The mount path carries the folder's name on purpose.** `/w/<name>` is what makes the memory
-be called `notes` rather than the mount point. A fixed mount would erase the name and every
+be called `maharum` rather than the mount point. A fixed mount would erase the name and every
 folder would be digested into one shared memory that overwrites the last.
 
-**5. Look at it.** Open the folder in Obsidian. `graph/kg/` is the knowledge graph as linked
+**6. Look at it.** Open the folder in Obsidian. `graph/kg/` is the knowledge graph as linked
 notes, rendered by Obsidian's own graph view alongside the notes it came from.
-
-**6. Wire the agents.** See below.
 
 ## Agent Wiring
 
+`pmb init` does all of it. This section is what it did, for when something needs checking.
+
 Both Claude Code and Codex reach the brain as a remote MCP server at
-`http://127.0.0.1:9000/mcp`. The same URL works whether the stack runs here or on a VM behind
-the tunnel, which is the point.
+`http://127.0.0.1:9000/mcp`, and the same URL works whether the stack runs here or on a VM
+behind the tunnel. `init` registers it with Claude Code through `claude mcp add`, appends an
+`[mcp_servers.plugmybrain]` block to `~/.codex/config.toml` because `codex mcp add` only
+handles stdio servers, and writes `agents/pmb.md` into `~/.claude/commands/` and
+`~/.codex/prompts/` with this checkout's path substituted in.
 
-```powershell
-claude mcp add --transport http plugmybrain http://127.0.0.1:9000/mcp --scope user
-```
+Both files are appended to, never rewritten: they are yours and hold settings this project
+knows nothing about. Re-running `init` is safe.
 
-For Codex, add this to `~/.codex/config.toml` by hand. `codex mcp add` only registers stdio
-servers, so the CLI cannot do this one:
-
-```toml
-[mcp_servers.plugmybrain]
-url = "http://127.0.0.1:9000/mcp"
-startup_timeout_sec = 60
-```
-
-### The slash command
-
-`agents/pmb.md` gives both agents `/pmb digest`, `/pmb reset` and `/pmb list`. Copy it once and
-set `PMB_HOME` to this checkout:
-
-```bash
-cp agents/pmb.md ~/.claude/commands/pmb.md
-cp agents/pmb.md ~/.codex/prompts/pmb.md
-```
-
-One file serves both, since they share the frontmatter fields and `$ARGUMENTS`. Restart both
-agents afterwards; they load commands at session start.
+If `claude` is not on PATH, `init` says so and prints the one command to run yourself.
 
 ## Deployment
 
@@ -245,11 +265,12 @@ the command line rather than in a file.
 ```text
 plugmybrain/
   config.py      # paths, the exclusion list, the dimension and index guards
+  bootstrap.py   # init: folder roles, the brain scaffold, and the agent wiring
   ingest.py      # add, cognify, then the vector index cognee does not create
   export.py      # the knowledge graph as Obsidian wikilink notes
   manage.py      # list and reset
-  cli.py         # the three commands
-agents/pmb.md    # the slash command, for Claude Code and Codex
+  cli.py         # the four commands
+agents/pmb.md    # the slash command template, installed by init into both agents
 compose.yaml     # postgres, the MCP server, and the pmb runner behind a profile
 scripts/         # provision-vm.sh, tunnel.ps1, backup.sh, init-pgvector.sql
 tests/

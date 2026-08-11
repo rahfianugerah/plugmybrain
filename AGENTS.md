@@ -17,14 +17,21 @@ graphify god-nodes --graph graph/plugmybrain/graphify-out/graph.json
 
 If the map is stale, rebuild it with `pmb digest` rather than reading files to compensate.
 
-## The Three Commands Are the Whole Surface
+## The Four Commands Are the Whole Surface
 
-`pmb digest`, `pmb reset`, `pmb list`. There is no search command, no export command, no note
-command. Do not add one back because a task would be easier with it; the surface is small on
-purpose, and a fourth command needs the user to ask for it.
+`pmb init`, `pmb digest`, `pmb reset`, `pmb list`. There is no search command, no export
+command, no note command. Do not add one back because a task would be easier with it; the
+surface is small on purpose, and a fifth command needs the user to ask for it.
 
 The folder is the unit. `pmb digest <folder>` makes that folder a memory named after itself.
-`memory/` inside it is human-authored and survives `reset`; `graph/` is generated and does not.
+`memory/` inside it is human-authored and survives `reset`; `graph/code/` and `graph/kg/` are
+generated and do not. `graph/README.md` is hand-written and also survives.
+
+`.pmb` holds one word, `root` or `brain`, written by `init`. A root digests every child that
+has markdown, brains first. Roles are optional: any folder with markdown digests without one.
+
+`init` runs on the host because it writes into the home directory. The other three run in the
+container.
 
 ## The PlugMyBrain MCP Server
 

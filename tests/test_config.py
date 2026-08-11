@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from plugmybrain import config, export, ingest, manage
+from plugmybrain import bootstrap, config, export, ingest, manage
 
 
 def test_namespace_is_the_lowercased_directory_name():
@@ -108,3 +108,39 @@ def test_reset_leaves_the_hand_written_readme_in_graph(tmp_path):
     # The README is generated-area markdown but not machine-written, so it is neither digested
     # nor counted as something a digest would rebuild.
     assert (markdown, written) == (0, 1)
+
+
+def test_a_root_digests_its_brain_before_anything_else(tmp_path):
+    """Everything else is read against the rules, so a half-finished run still leaves a brain."""
+    for name in ("zeta-service", "the-rules", "alpha-service"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "README.md").write_text("#", encoding="utf-8")
+    (tmp_path / "empty").mkdir()
+    bootstrap.init(tmp_path / "the-rules", "brain", wire=False)
+
+    assert [p.name for p in bootstrap.children(tmp_path)] == [
+        "the-rules",
+        "alpha-service",
+        "zeta-service",
+    ]
+
+
+def test_a_folder_will_not_silently_change_role(tmp_path):
+    bootstrap.init(tmp_path, "brain", wire=False)
+    assert bootstrap.role_of(tmp_path) == "brain"
+    with pytest.raises(SystemExit):
+        bootstrap.init(tmp_path, "root", wire=False)
+
+
+def test_init_scaffolds_a_brain_without_overwriting_what_is_there(tmp_path):
+    (tmp_path / config.HUMAN).mkdir()
+    (tmp_path / config.HUMAN / "README.md").write_text("mine", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+
+    bootstrap.init(tmp_path, "brain", wire=False)
+
+    assert (tmp_path / config.HUMAN / "README.md").read_text(encoding="utf-8") == "mine"
+    for note_type in bootstrap.NOTE_TYPES:
+        assert (tmp_path / config.HUMAN / note_type).is_dir()
+    ignored = (tmp_path / ".gitignore").read_text(encoding="utf-8")
+    assert "node_modules/" in ignored and "graph/kg/" in ignored

@@ -74,13 +74,18 @@ def _on_disk(target: Path) -> tuple[int, int, int, int]:
     )
 
 
-async def status(target: Path) -> Status:
-    """Everything known about the memory: the database, and the folder it came from."""
+async def status(target: Path, scan: bool = True) -> Status:
+    """Everything known about the memory: the database, and the folder it came from.
+
+    `scan=False` skips the disk walk, which is what a root wants: counting its markdown means
+    counting every child's, and the sum of things that were digested separately is not a number
+    that means anything.
+    """
     config.configure(models=False)
 
     target = target.resolve()
     name = config.namespace(target)
-    markdown, skipped, human, generated = _on_disk(target)
+    markdown, skipped, human, generated = _on_disk(target) if scan else (0, 0, 0, 0)
 
     connection = await _pool()
     try:
