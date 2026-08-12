@@ -176,10 +176,19 @@ both agents afterwards. There is nothing else to configure.
 
 ```bash
 FOLDER=C:/Users/you/maharum
-docker compose run --rm -v "$FOLDER:/w/maharum" pmb digest /w/maharum
+MSYS_NO_PATHCONV=1 docker compose run --rm -v "$FOLDER:/w/maharum" pmb digest /w/maharum
 ```
 
 On a root that walks every child. On any other folder it digests just that one.
+
+**Run it from this checkout, and never name the file with `-f`.** Compose only picks
+`compose.override.yaml` up when it finds the file itself, so `-f compose.yaml` silently drops
+the override and recreates Postgres on the default port, which a development machine usually
+already owns. The stack goes down before the digest starts.
+
+**`MSYS_NO_PATHCONV=1` is for Git Bash**, which rewrites `/w/maharum` into `W:/maharum` and
+fails with `not a directory`. It is an unused variable in PowerShell and on Linux, so one
+command is correct everywhere.
 
 **Always run in the container.** `pmb` on the host hangs on Cognee's subprocess database
 workers on Windows, and a killed run stores host paths in Postgres that no container can

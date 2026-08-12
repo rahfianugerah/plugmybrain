@@ -38,9 +38,18 @@ These run in the container. `pmb` on the host hangs on Cognee's subprocess worke
 and a killed run writes host paths into Postgres that no later run can resolve.
 
 ```bash
-docker compose -f "$PMB/compose.yaml" run --rm \
+cd "$PMB" && MSYS_NO_PATHCONV=1 docker compose run --rm \
   -v "$FOLDER:/w/$NAME" pmb <action> "/w/$NAME"
 ```
+
+**`cd`, never `-f "$PMB/compose.yaml"`.** Compose only picks `compose.override.yaml` up when it
+finds the file itself, so naming one with `-f` drops the override, and Postgres is then
+recreated on the default port a development machine usually already owns. That takes the
+running stack down before the action even starts.
+
+**`MSYS_NO_PATHCONV=1` is what makes it work in Git Bash**, which rewrites `/w/<name>` into
+`W:/<name>` and fails with `not a directory: /app/W:/...`. It is an unused variable everywhere
+else, so the one command is correct on every shell and every platform.
 
 The mount path carries the folder's name on purpose: that name IS the memory it lands in, and a
 fixed mount point would digest every folder into one shared memory that overwrites the last.
