@@ -25,10 +25,11 @@ add a fifth command, a third tool, or a third slash command because a task would
 one; every tool an agent can see costs context on every turn, which is why cognee-mcp's eleven
 were dropped for two.
 
-There is no command for writing a note, and `/pmb-note` was removed rather than repaired. A
-note is a markdown file in the folder's `memory/`, written with the tools an agent already has
-and folded in by the next digest. A command would have added a step that writes nothing the
-agent could not write itself.
+Writing a note is `/pmb memory`, an action inside `/pmb` and deliberately not a fifth CLI
+command. A note is a markdown file in the folder's `memory/`, written with the tools an agent
+already has and folded in by the next digest, so a command would have added a step that writes
+nothing the agent could not write itself. `/pmb-note` was removed rather than repaired for the
+same reason: it existed to call a `pmb note` subcommand that should never have been built.
 
 The folder is the unit. `pmb digest <folder>` makes that folder a memory named after itself.
 `.pmb` holds one word, `root` or `brain`. A root digests every child that has markdown, brains

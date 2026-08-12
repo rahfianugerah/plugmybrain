@@ -40,11 +40,14 @@ There is a fifth thing, and it is not a command: **`/pmb-map <brain>`** tells th
 session to read from a different brain from here on. It changes nothing on disk and restarts
 nothing; one stack holds every memory, and this is which one gets asked.
 
-So an agent gets **two slash commands and no more**: `/pmb` for the four actions above, and
-`/pmb-map` for which brain the session reads. There is deliberately no command for writing a
-note, because a note is not something a command creates: it is a markdown file you write into
-the folder's `memory/` and then digest, and a note that exists only in the index is gone at the
-next rebuild.
+So an agent gets **two slash commands and no more**: `/pmb` for the four commands above plus
+`/pmb memory`, and `/pmb-map` for which brain the session reads.
+
+**`/pmb memory` is an action, not a command.** It tells the agent to write what the session
+learned into the folder's `memory/` as one note, then digest. There is no `pmb memory`
+subcommand behind it and there should not be: a note is a markdown file, the agent already has
+the tools to write one, and a command would only have added a step. A note that exists only in
+the index is gone at the next rebuild, which is why nothing writes to Cognee directly.
 
 **This is built for coding agents.** Claude Code, Codex, opencode, and anything else speaking
 MCP. It is not a chatbot back end, and **there is no chat model in it at all** - no
