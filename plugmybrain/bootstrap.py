@@ -69,6 +69,7 @@ class InitReport:
     role: str
     target: Path
     created: list[Path] = field(default_factory=list)
+    removed: list[Path] = field(default_factory=list)
     wired: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -173,6 +174,19 @@ def _wire_codex(report: InitReport) -> None:
     report.wired.append(f"Codex -> {mcp_url()}")
 
 
+def _stale_commands(directory: Path, keep: set[str]) -> list[Path]:
+    """The commands this project installed once and no longer ships.
+
+    `init` only ever wrote, so a command dropped from `agents/` outlived the action it
+    described and kept offering it: `/pmb-note` went on calling a `pmb note` subcommand that
+    no longer exists. Matching is scoped to the `pmb` prefix, which is this project's namespace
+    and nobody else's, so a command somebody wrote by hand is never touched.
+    """
+    if not directory.is_dir():
+        return []
+    return [path for path in sorted(directory.glob("pmb*.md")) if path.name not in keep]
+
+
 def _install_command(report: InitReport) -> None:
     """Write every slash command into both agents, with this machine's paths substituted.
 
@@ -185,6 +199,7 @@ def _install_command(report: InitReport) -> None:
             f"no command templates in {config.REPO_ROOT / 'agents'}, so nothing was installed"
         )
         return
+    keep = {template.name for template in templates}
     for directory in (Path.home() / ".claude" / "commands", Path.home() / ".codex" / "prompts"):
         directory.mkdir(parents=True, exist_ok=True)
         for template in templates:
@@ -195,6 +210,9 @@ def _install_command(report: InitReport) -> None:
                 .replace("{{MCP_URL}}", mcp_url())
             )
             (directory / template.name).write_text(text, encoding="utf-8")
+        for stale in _stale_commands(directory, keep):
+            stale.unlink()
+            report.removed.append(stale)
         report.wired.append(f"{', '.join('/' + t.stem for t in templates)} -> {directory}")
 
 

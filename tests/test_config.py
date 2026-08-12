@@ -126,6 +126,19 @@ def test_a_root_digests_its_brain_before_anything_else(tmp_path, monkeypatch):
     ]
 
 
+def test_init_drops_a_command_this_project_no_longer_ships(tmp_path):
+    """A command that outlives its action keeps offering it. `/pmb-note` called `pmb note`."""
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    for name in ("pmb.md", "pmb-map.md", "pmb-note.md", "my-own-command.md"):
+        (commands / name).write_text("#", encoding="utf-8")
+
+    stale = bootstrap._stale_commands(commands, {"pmb.md", "pmb-map.md"})
+
+    # Only the `pmb` namespace, and only what `agents/` no longer holds.
+    assert [path.name for path in stale] == ["pmb-note.md"]
+
+
 def test_a_folder_will_not_silently_change_role(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DOCS", tmp_path / "vault")
     bootstrap.init(tmp_path, "brain", wire=False)

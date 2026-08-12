@@ -40,8 +40,14 @@ There is a fifth thing, and it is not a command: **`/pmb-map <brain>`** tells th
 session to read from a different brain from here on. It changes nothing on disk and restarts
 nothing; one stack holds every memory, and this is which one gets asked.
 
+So an agent gets **two slash commands and no more**: `/pmb` for the four actions above, and
+`/pmb-map` for which brain the session reads. There is deliberately no command for writing a
+note, because a note is not something a command creates: it is a markdown file you write into
+the folder's `memory/` and then digest, and a note that exists only in the index is gone at the
+next rebuild.
+
 **This is built for coding agents.** Claude Code, Codex, opencode, and anything else speaking
-MCP. It is not a chatbot back end, and **there is no chat model in it at all** — no
+MCP. It is not a chatbot back end, and **there is no chat model in it at all** - no
 `LLM_API_KEY`, nothing that can run up a bill. The agent asking the question already has a
 model; this only has to find the right passages. See `## No Chat Model`.
 
@@ -82,7 +88,7 @@ extract_dlt_fk_edges            LOAD: foreign-key edges
 
 **PlugMyBrain runs the first, second and fourth.** Only the third calls a chat model, and it
 was the entire bill: it emits structured JSON per chunk, so output tokens dominate, and a 3.6MB
-corpus cost roughly $9 on `gemini-3.5-flash` — a model whose name says flash and whose output
+corpus cost roughly $9 on `gemini-3.5-flash` - a model whose name says flash and whose output
 price is $9.00 per million, nearly what 2.5-pro charges.
 
 `cognify()` hardcodes those five, so this calls `run_pipeline` with its own list instead. There
@@ -96,7 +102,7 @@ is no flag; the task list is the flag.
 
 **What was lost:** the entity graph, and with it any question answered by traversing between
 documents rather than matching text within one. Retrieval, which is what a coding agent needs,
-is untouched — measured on a folder digested with `LLM_API_KEY` blanked out entirely:
+is untouched - measured on a folder digested with `LLM_API_KEY` blanked out entirely:
 
 ```text
 recall "why not pandas for the loader" -> the-loader-uses-polars.md
@@ -213,6 +219,11 @@ belong to the brain, over-fetches, and drops the rest before the agent sees them
 stdio servers only, and both slash commands into `~/.claude/commands/` and `~/.codex/prompts/`.
 Both config files are appended to, never rewritten. Re-running `init` is safe. If `claude` is
 not on PATH it says so and prints the one command to run yourself.
+
+**`init` also deletes a `pmb` command this project no longer ships**, and prints what it
+removed. It used to only write, so a command dropped from `agents/` stayed on the machine and
+went on offering an action the CLI had already lost. Only the `pmb` prefix is touched, so a
+command you wrote yourself is safe.
 
 The URL is `http://127.0.0.1:9000/mcp` whether the stack runs here or on a VM behind the
 tunnel, which is the point.
@@ -367,8 +378,8 @@ pasted into an ordinary `.md` still gets through.
 - **Only markdown is digested.** Obsidian is the viewer and markdown is the substrate, so PDF,
   docx and csv are not read. Convert first if you need them.
 - **There is no entity graph.** Retrieval matches text within a document. A question whose
-  answer needs traversing *between* documents — "which services depend on the thing that
-  changed" — is not answered by `recall`. Graphify's code map covers that for code; for prose
+  answer needs traversing *between* documents - "which services depend on the thing that
+  changed" - is not answered by `recall`. Graphify's code map covers that for code; for prose
   it is a real gap, and it is the price of having no chat model.
 - **The graph store is a demo feature.** Postgres-as-graph is released by Cognee as a demo; the
   production version is licensed. It is used here because one database holds relational, vector

@@ -20,9 +20,15 @@ If the map is stale, rebuild it with `pmb digest` rather than reading files to c
 ## The Surface Is Small On Purpose
 
 `pmb init`, `pmb digest`, `pmb reset`, `pmb list`. Two MCP tools, `recall` and `brains`, and
-neither writes. Do not add a fifth command or a third tool because a task would be easier with
+neither writes. Two slash commands, `/pmb` and `/pmb-map`, and both only wrap the above. Do not
+add a fifth command, a third tool, or a third slash command because a task would be easier with
 one; every tool an agent can see costs context on every turn, which is why cognee-mcp's eleven
 were dropped for two.
+
+There is no command for writing a note, and `/pmb-note` was removed rather than repaired. A
+note is a markdown file in the folder's `memory/`, written with the tools an agent already has
+and folded in by the next digest. A command would have added a step that writes nothing the
+agent could not write itself.
 
 The folder is the unit. `pmb digest <folder>` makes that folder a memory named after itself.
 `.pmb` holds one word, `root` or `brain`. A root digests every child that has markdown, brains
@@ -64,7 +70,7 @@ membership is checked and foreign documents are dropped before the agent sees th
 ## There Is No Chat Model
 
 Do not add one back. `pmb digest` runs cognee's pipeline with `extract_graph_and_summarize`
-removed — the one step of five that calls a chat model, and the one that produced a real bill:
+removed - the one step of five that calls a chat model, and the one that produced a real bill:
 structured JSON per chunk, so output tokens dominated, roughly $9 for a 3.6MB corpus.
 
 `cognify()` hardcodes its five tasks, so `ingest.py` calls `run_pipeline` with its own list.

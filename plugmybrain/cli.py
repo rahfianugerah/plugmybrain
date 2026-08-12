@@ -182,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{report.target} is now a {report.role}.")
         for path in report.created:
             print(f"created:  {path}")
+        for path in report.removed:
+            print(f"removed:  {path}, no longer shipped by this project")
         for wired in report.wired:
             print(f"wired:    {wired}")
         for warning in report.warnings:
