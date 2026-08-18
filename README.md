@@ -351,7 +351,6 @@ plugmybrain/
   config.py      # paths, the exclusion list, the dimension and index guards
   bootstrap.py   # init: folder roles, the brain scaffold, and the agent wiring
   ingest.py      # add, cognify, then the vector index cognee does not create
-  export.py      # the knowledge graph as Obsidian wikilink notes
   retrieve.py    # brain-scoped search, enforced against Postgres
   server.py      # the MCP server: two read-only tools
   manage.py      # list and reset
@@ -371,6 +370,25 @@ ruff check .          # lint
 ruff format .         # format
 pytest                # tests
 ```
+
+### Branches
+
+Three permanent branches, promoted in one direction: **`dev` to `staging` to `main`**, per the
+promotion shape in the vault's branch standard. This project deploys, so a change needs somewhere to be
+wrong before it is wrong on the VM.
+
+| Branch | Holds |
+| :- | :- |
+| `main` | What runs on the VM. Always working |
+| `staging` | What is being verified before release |
+| `dev` | Where work lands first |
+
+Work branches off `dev` as `<type>/<description>`, merges back, and is deleted. Never commit
+straight to `staging` or `main`, and never merge backwards. A hotfix is the one exception: it
+branches from `main`, merges to `main`, and is carried back to `dev` and `staging` in the same
+session, or the branches diverge and the next promotion carries a revert nobody intended.
+
+None of the three is ever force pushed.
 
 ## Privacy
 
