@@ -1,74 +1,39 @@
 # PlugMyBrain
 
-The memory brain itself. Four commands, two MCP tools, and everything else is markdown.
+The memory brain itself. Six MCP tools, ten slash commands, and everything else is markdown.
 
 @README.md
 
 ## Before You Search This Repository
 
-**Code structure comes from the map, not from grepping.** `graph/plugmybrain/graphify-out/graph.json`
-is an AST map extracted by tree-sitter, and reading it costs no model tokens. Query it instead
-of walking the tree:
+**Code structure comes from the map, not from grepping.** Once this checkout has been digested, call the `plugmybrain` server's `code_map` tool with `brain: "plugmybrain"`, or query the raw graph directly:
 
 ```bash
 graphify query "where is the vector index created" --graph graph/plugmybrain/graphify-out/graph.json
 graphify god-nodes --graph graph/plugmybrain/graphify-out/graph.json
 ```
 
-If the map is stale, rebuild it with `pmb digest` rather than reading files to compensate.
+If the map is stale, digest again rather than reading files to compensate.
 
 ## The Surface Is Small On Purpose
 
-`pmb init`, `pmb digest`, `pmb reset`, `pmb list`. Two MCP tools, `recall` and `brains`, and
-neither writes. Do not add a fifth command or a third tool because a task would be easier with
-one; every tool an agent can see costs context on every turn, which is why cognee-mcp's eleven
-were dropped for two.
+The MCP server in `plugmybrain/server.py` is the whole product. Six tools: `recall`, `brains`, `status` and `code_map` read; `digest` and `reset` write to the index and the vault only. The `/pmb-*` commands in `commands/` are prompts that tell an agent which tool to call, and `/pmb-setup` in `.claude/commands/` wires a machine once.
 
-The folder is the unit. `pmb digest <folder>` makes that folder a memory named after itself.
-`.pmb` holds one word, `root` or `brain`. A root digests every child that has markdown, brains
-first. Roles are optional: any folder with markdown digests without one.
+Do not add a seventh tool or another command because a task would be easier with one. Every tool an agent can see costs context on every turn, which is why cognee-mcp's eleven were replaced.
 
-**A digested folder is only ever read.** Everything generated lands in `config.DOCS`, one
-Obsidian vault, under `graph/code/<brain>/`. Never write into the folder being digested; that
-property is why the mount can be read-only.
+`plugmybrain/cli.py` is what a background job runs inside the container. It is not the interface; never tell a user to type it.
 
-`init` runs on the host because it writes into the home directory. The other three run in the
-container: native `pmb` hangs on cognee's subprocess workers on Windows, and a killed run writes
-host paths into Postgres that no later run can resolve.
+## Rules That Keep It Honest
 
-## The PlugMyBrain MCP Server
-
-`plugmybrain/server.py`, at `http://127.0.0.1:9000/mcp`. Two tools:
-
-```json
-{"query": "why is there no licence", "brain": "plugmybrain", "top_k": 15}
-```
-
-`recall` returns passages with the file each came from. Pass `brain`, which is the folder's own
-name lowercased; several comma-separated only when a question genuinely spans them. `brains`
-lists what exists.
-
-Isolation is enforced against Postgres in `retrieve.py`, not by cognee: cognee keeps every
-memory in one vector collection and its `datasets` argument does not scope a search, so
-membership is checked and foreign documents are dropped before the agent sees them.
-
-## Two Things Not to Do
-
-- **Never write to Cognee directly.** The memory is markdown: write a note into the folder's
-  `memory/`, then digest. A note that exists only in the index is gone at the next rebuild, and
-  nothing will warn you. This is why `remember` and `forget` are not exposed.
-- Do not hand-edit anything under the vault's `graph/code/`. It is rebuilt by every digest and
-  deleted by every reset. If something there is worth keeping, move it into `memory/` yourself
-  and write down why.
+- **The server never writes into a project.** `PMB_WORKSPACE` is mounted read-only. Roles, scaffolds and notes are written by the agent's own file tools, as the commands describe.
+- **Never write into Cognee directly.** A note is a markdown file in the folder's `memory/`, folded in by the next digest. A note that exists only in the index is gone at the next rebuild, which is why `remember` and `forget` are not exposed.
+- **Do not hand-edit anything under the vault's `graph/code/`.** Every digest rebuilds it and every reset deletes it.
+- **Isolation is by document id.** Cognee's `datasets` argument does not scope a search, so `retrieve.py` keeps only chunks whose `document_id` belongs to the requested brain in Postgres. Never filter by file name: two brains often share one.
+- **One embedding model per database.** `manage.embedding_mismatch` refuses a digest or a search with a model other than the one recorded. Do not weaken it to make a switch easier.
+- **Ingestion runs in the container.** On the Windows host Cognee's subprocess workers hang, and a killed run writes host paths into Postgres that no later run can resolve.
 
 ## There Is No Chat Model
 
-Do not add one back. `pmb digest` runs cognee's pipeline with `extract_graph_and_summarize`
-removed — the one step of five that calls a chat model, and the one that produced a real bill:
-structured JSON per chunk, so output tokens dominated, roughly $9 for a 3.6MB corpus.
+Do not add one back. A digest runs Cognee's pipeline with `extract_graph_and_summarize` removed: the one step of five that calls a chat model, and the one that produced a real bill, roughly $9 for a 3.6MB corpus. `cognify()` hardcodes its five tasks, so `ingest.py` calls `run_pipeline` with its own list. If a task ever needs adding, check first whether it calls a model.
 
-`cognify()` hardcodes its five tasks, so `ingest.py` calls `run_pipeline` with its own list.
-If a task ever needs adding, check first whether it calls a model.
-
-The cost of that: no entity graph, so a question needing traversal between documents is not
-answered by `recall`. Retrieval within documents is unaffected and is what an agent needs.
+The cost: no entity graph, so a question needing traversal between documents is not answered by `recall`. Retrieval within documents is unaffected and is what an agent needs.
