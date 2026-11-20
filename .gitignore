@@ -17,3 +17,6 @@ graph/
 
 # graphify drops a stat cache in the working directory whatever --out says.
 graphify-out/
+
+# Claude Code local settings
+.claude/settings.local.json

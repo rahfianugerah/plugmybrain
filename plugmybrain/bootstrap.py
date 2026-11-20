@@ -1,8 +1,7 @@
-# `pmb init`: everything that used to be a manual step. Registers the folder's role, scaffolds a
-# brain, and wires Claude Code and Codex to the running stack.
+# Wires this machine's agents to the server: registers it with Claude Code and Codex, and
+# installs the /pmb-* commands. Standard library only, so any Python on the host runs it.
 #
-# Nothing here calls a model or touches the database, so it runs on the host rather than in the
-# container: it has to write into your home directory, which the container cannot see.
+#   python -m plugmybrain.bootstrap
 from __future__ import annotations
 
 import os
@@ -13,256 +12,106 @@ from pathlib import Path
 
 from plugmybrain import config
 
-# The role marker lives in the folder rather than in a config file under $HOME, because the
-# container only ever sees the folder. A registry outside it would be invisible at the moment
-# `pmb digest` needs to know whether it is looking at one project or a parent full of them.
-MARKER = ".pmb"
-ROLES = ("root", "brain")
-
-# The four kinds of note. A brain is scaffolded with a folder each, so there is somewhere
-# obvious to put the first one.
-NOTE_TYPES = ("fact", "decision", "session", "reference")
-
 SERVER = "plugmybrain"
-
-_MEMORY_README = """# Memory
-
-Human-authored. This folder is the memory; everything else PlugMyBrain produces is an index
-over it that `pmb digest` rebuilds and `pmb reset` throws away.
-
-| Folder | Answers | Example |
-| :- | :- | :- |
-| `fact/` | What is true | The conda env for project X is `xyz` |
-| `decision/` | Why it is this way | Chose Polars over pandas, because the file is 40GB |
-| `session/` | What happened | Debugged the scaler leak, found it in `preprocess.py` |
-| `reference/` | Where to look | The paper the architecture came from |
-
-One note holds one thing, and its title states that thing. A note that needs a "and also" is
-two notes.
-
-Write a note here, then run `pmb digest`. Never write into Cognee directly: it is an index, and
-a direct write is gone at the next rebuild with nothing to warn you.
-"""
-
-_GRAPH_README = """# Graph
-
-Every brain on this machine generates into here, one folder per brain. `pmb digest` writes it
-and `pmb reset` deletes it, so editing anything below this file is wasted work.
-
-`code/<brain>/` holds the Graphify code map: the hubs, the connections, and the questions worth
-asking about a codebase, extracted by tree-sitter with no model involved at all.
-
-It lands here rather than inside each project so no repository grows a `graph/` nobody asked
-for, and so one vault shows everything. A digested folder is only ever read.
-
-This README is not generated and is not deleted by a reset.
-
-When a generated note turns out to be worth keeping, move it into `memory/` yourself and write
-down why. A kept note with no reason written down is a machine's guess with a date on it.
-"""
-
-_GITIGNORE = ("graph/code/",)
+COMMANDS = config.REPO_ROOT / "commands"
 
 
 @dataclass
-class InitReport:
-    role: str
-    target: Path
-    created: list[Path] = field(default_factory=list)
-    removed: list[Path] = field(default_factory=list)
+class SetupReport:
     wired: list[str] = field(default_factory=list)
+    installed: list[Path] = field(default_factory=list)
+    removed: list[Path] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
-def role_of(target: Path) -> str | None:
-    """`root`, `brain`, or None for a folder that was never initialised."""
-    marker = target / MARKER
-    if not marker.is_file():
-        return None
-    value = marker.read_text(encoding="utf-8").strip().lower()
-    return value if value in ROLES else None
-
-
 def mcp_url() -> str:
-    """Where the MCP server listens. The publish port is a variable, so this reads it rather
-    than hardcoding 9000 and being wrong on a second stack."""
+    """Where the server listens; the publish port is a variable, so it is read, not assumed."""
     return f"http://127.0.0.1:{os.getenv('MCP_PUBLISH_PORT', '9000')}/mcp"
 
 
-def _write(path: Path, text: str, created: list[Path]) -> None:
-    """Write a file only when it is absent. An init that overwrites is an init nobody dares
-    re-run, and re-running it is the whole point of making it idempotent."""
-    if path.exists():
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    created.append(path)
-
-
-def _scaffold_brain(target: Path, report: InitReport) -> None:
-    """Give a brain somewhere to write: `memory/`, and a folder per kind of note.
-
-    Only `memory/`. Nothing generated goes in here; that all lands in the vault, which is why a
-    digested folder is only ever read.
-    """
-    for note_type in NOTE_TYPES:
-        (target / config.HUMAN / note_type).mkdir(parents=True, exist_ok=True)
-        _write(target / config.HUMAN / note_type / ".gitkeep", "", report.created)
-    _write(target / config.HUMAN / "README.md", _MEMORY_README, report.created)
-
-
-def _scaffold_vault(report: InitReport) -> None:
-    """Make sure the one vault every brain generates into exists and ignores its own output."""
-    _write(config.DOCS / config.GENERATED / "README.md", _GRAPH_README, report.created)
-
-    # The generated subfolders are rebuilt from the markdown, so committing them is committing a
-    # cache. Appended rather than rewritten: this file is the user's.
-    gitignore = config.DOCS / ".gitignore"
-    existing = gitignore.read_text(encoding="utf-8") if gitignore.is_file() else ""
-    missing = [line for line in _GITIGNORE if line not in existing]
-    if missing:
-        separator = "" if existing.endswith("\n") or not existing else "\n"
-        gitignore.write_text(
-            f"{existing}{separator}\n# PlugMyBrain, regenerated by `pmb digest`\n"
-            + "\n".join(missing)
-            + "\n",
-            encoding="utf-8",
-        )
-        report.created.append(gitignore)
-
-
-def _wire_claude(home: Path, report: InitReport) -> None:
-    """Register the MCP server with Claude Code, through its own CLI so the config format stays
-    Claude's problem rather than something this project has to track."""
+def _wire_claude(report: SetupReport) -> None:
+    """Register the server through Claude Code's own CLI, so its config format stays its own."""
     claude = shutil.which("claude")
+    command = ["mcp", "add", "--transport", "http", SERVER, mcp_url(), "--scope", "user"]
     if claude is None:
-        report.warnings.append(
-            "claude not on PATH, so the MCP server was not registered with Claude Code. "
-            f"Run: claude mcp add --transport http {SERVER} {mcp_url()} --scope user"
-        )
+        report.warnings.append(f"claude is not on PATH. Run: claude {' '.join(command)}")
         return
-    result = subprocess.run(
-        [claude, "mcp", "add", "--transport", "http", SERVER, mcp_url(), "--scope", "user"],
-        capture_output=True,
-        text=True,
-    )
-    # Already registered is a success for an idempotent init, and its exit code is not.
+    result = subprocess.run([claude, *command], capture_output=True, text=True)
+    # Already registered is success for a setup that is safe to re-run
     if result.returncode and "already exists" not in (result.stdout + result.stderr).lower():
         report.warnings.append(f"claude mcp add failed: {result.stderr.strip()[:200]}")
         return
-    report.wired.append(f"Claude Code -> {mcp_url()}")
+    report.wired.append(f"Claude Code > {mcp_url()}")
 
 
-def _wire_codex(report: InitReport) -> None:
-    """Add the server to Codex's config.toml. `codex mcp add` only registers stdio servers, so
-    this one has to be written by hand.
-
-    Appended, never rewritten: that file is the user's and holds settings this project knows
-    nothing about.
-    """
-    path = Path.home() / ".codex" / "config.toml"
-    block = f'\n[mcp_servers.{SERVER}]\nurl = "{mcp_url()}"\nstartup_timeout_sec = 60\n'
+def _wire_codex(report: SetupReport, home: Path) -> None:
+    """Append the server to Codex's config.toml; `codex mcp add` takes stdio servers only."""
+    path = home / ".codex" / "config.toml"
+    block = (
+        f'\n[mcp_servers.{SERVER}]\nurl = "{mcp_url()}"\n'
+        "startup_timeout_sec = 60\ntool_timeout_sec = 120\n"
+    )
     if path.is_file():
         if f"[mcp_servers.{SERVER}]" in path.read_text(encoding="utf-8"):
-            report.wired.append(f"Codex -> {mcp_url()} (already present)")
+            report.wired.append(f"Codex > {mcp_url()} (already present)")
             return
         with path.open("a", encoding="utf-8") as handle:
             handle.write(block)
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(block.lstrip("\n"), encoding="utf-8")
-    report.wired.append(f"Codex -> {mcp_url()}")
+    report.wired.append(f"Codex > {mcp_url()}")
 
 
-def _stale_commands(directory: Path, keep: set[str]) -> list[Path]:
-    """The commands this project installed once and no longer ships.
-
-    `init` only ever wrote, so a command dropped from `agents/` outlived the action it
-    described and kept offering it: `/pmb-note` went on calling a `pmb note` subcommand that
-    no longer exists. Matching is scoped to the `pmb` prefix, which is this project's namespace
-    and nobody else's, so a command somebody wrote by hand is never touched.
-    """
+def stale_commands(directory: Path, keep: set[str]) -> list[Path]:
+    """Commands this project installed once and no longer ships. The pmb prefix is ours alone."""
     if not directory.is_dir():
         return []
     return [path for path in sorted(directory.glob("pmb*.md")) if path.name not in keep]
 
 
-def _install_command(report: InitReport) -> None:
-    """Write every slash command into both agents, with this machine's paths substituted.
-
-    Substituted rather than left as an environment variable: the whole point of `init` is that
-    nothing is left for you to set by hand afterwards.
-    """
-    templates = sorted((config.REPO_ROOT / "agents").glob("*.md"))
+def install_commands(report: SetupReport, home: Path) -> None:
+    """Copy every /pmb-* command into both agents, and remove the ones no longer shipped."""
+    templates = sorted(COMMANDS.glob("pmb*.md"))
     if not templates:
-        report.warnings.append(
-            f"no command templates in {config.REPO_ROOT / 'agents'}, so nothing was installed"
-        )
+        report.warnings.append(f"no commands in {COMMANDS}, so nothing was installed")
         return
     keep = {template.name for template in templates}
-    for directory in (Path.home() / ".claude" / "commands", Path.home() / ".codex" / "prompts"):
+    for directory in (home / ".claude" / "commands", home / ".codex" / "prompts"):
         directory.mkdir(parents=True, exist_ok=True)
         for template in templates:
-            text = (
-                template.read_text(encoding="utf-8")
-                .replace("{{PMB_HOME}}", config.REPO_ROOT.as_posix())
-                .replace("{{PMB_DOCS}}", config.DOCS.as_posix())
-                .replace("{{MCP_URL}}", mcp_url())
-            )
-            (directory / template.name).write_text(text, encoding="utf-8")
-        for stale in _stale_commands(directory, keep):
+            target = directory / template.name
+            shutil.copyfile(template, target)
+            report.installed.append(target)
+        for stale in stale_commands(directory, keep):
             stale.unlink()
             report.removed.append(stale)
-        report.wired.append(f"{', '.join('/' + t.stem for t in templates)} -> {directory}")
 
 
-def init(target: Path, role: str, wire: bool = True) -> InitReport:
-    """Mark a folder's role and make sure the agents can reach the brain.
-
-    Safe to re-run: nothing existing is overwritten except the slash command, which this
-    project owns. `wire=False` marks the folder without touching the home directory, which is
-    what the tests want and what a second `init` in the same session does not need.
-    """
-    if role not in ROLES:
-        raise SystemExit(f"unknown role {role!r}. Use: {' or '.join(ROLES)}")
-
-    target = target.resolve()
-    report = InitReport(role=role, target=target)
-
-    marker = target / MARKER
-    previous = role_of(target)
-    if previous and previous != role:
-        raise SystemExit(
-            f"{target} is already initialised as a {previous}. Delete {marker} first if that "
-            "was wrong; changing it silently would move where the memory is built from."
-        )
-    if previous is None:
-        marker.write_text(f"{role}\n", encoding="utf-8")
-        report.created.append(marker)
-
-    if role == "brain":
-        _scaffold_brain(target, report)
-    _scaffold_vault(report)
-
+def setup(home: Path | None = None, wire: bool = True) -> SetupReport:
+    """Safe to re-run: config files are appended to, and only our own commands are replaced."""
+    home = Path.home() if home is None else home
+    report = SetupReport()
     if wire:
-        _wire_claude(Path.home(), report)
-        _wire_codex(report)
-        _install_command(report)
+        _wire_claude(report)
+        _wire_codex(report, home)
+    install_commands(report, home)
     return report
 
 
-def children(root: Path) -> list[Path]:
-    """The folders a root digests, brains first.
+def main() -> int:
+    report = setup()
+    for line in report.wired:
+        print(f"wired:     {line}")
+    commands = sorted({path.stem for path in report.installed})
+    print(f"installed: {', '.join('/' + name for name in commands)}")
+    for path in report.removed:
+        print(f"removed:   {path}, no longer shipped")
+    for warning in report.warnings:
+        print(f"WARNING:   {warning}")
+    print("\nRestart Claude Code and Codex: both load commands and servers at start.")
+    return 0
 
-    Brains first because the rules and decisions are what every other answer is read against,
-    and a half-finished run is then still useful rather than a pile of code with no standard.
-    """
-    found = [
-        path
-        for path in sorted(root.iterdir())
-        if path.is_dir()
-        and not path.name.startswith(".")
-        and path.name not in config.EXCLUDED_DIRS
-        and config.collect_documents(path)[0]
-    ]
-    return sorted(found, key=lambda path: role_of(path) != "brain")
+
+if __name__ == "__main__":
+    raise SystemExit(main())

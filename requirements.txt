@@ -1,20 +1,13 @@
-# The image's dependency tree. Mirrors the pip block in environment.yml, which is what the
-# `env` conda environment installs. Graphify is absent on purpose: mapping is a local command,
-# never a deployed one.
-#
-# postgres-binary, not postgres: the plain extra pulls psycopg2 from source, which needs
-# pg_config and a compiler that python:3.13-slim does not ship. The binary extra is prebuilt
-# wheels.
+# The image's dependencies. Mirrors the pip block in environment.yml.
+
+# postgres-binary: the plain extra builds psycopg2 from source, which the slim image cannot
 cognee[postgres-binary]==1.4.2
 
-# The MCP server is plugmybrain/server.py, not cognee-mcp. Dropping cognee-mcp took its
-# cognee[docs,neo4j] dependency line with it, which is where torch, triton and 2.7GB of CUDA
-# libraries came from on a machine with no GPU.
-#
-# >=2.0.0 because FastMCP moved and was renamed: 1.x has mcp.server.fastmcp.FastMCP, 2.x has
-# mcp.server.mcpserver.MCPServer, and server.py imports the second. The old <2.0.0 ceiling
-# existed only for cognee-mcp, which is gone.
+# 2.x: server.py imports MCPServer from mcp.server.mcpserver
 mcp>=2.0.0,<3.0.0
+
+# The code map, built by tree-sitter inside the server
+graphifyy==0.9.38
 
 asyncpg
 python-dotenv

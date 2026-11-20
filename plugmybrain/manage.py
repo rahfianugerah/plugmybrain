@@ -1,7 +1,5 @@
-# `pmb list` and `pmb reset`: what the brain holds, and how to throw it away.
-#
-# Both are deliberately blunt about the one thing that matters — the markdown on disk is the
-# real memory, and the database is a derived index that can always be rebuilt from it.
+# What the brain holds, how to throw it away, and which model it was embedded with.
+# The markdown on disk is the memory; the database is an index rebuilt from it.
 from __future__ import annotations
 
 import shutil
@@ -38,10 +36,9 @@ class ResetReport:
     scope: str
     documents: int
     generated: list[Path]
-    kept: Path | None
 
 
-async def _pool():
+async def _connect():
     import asyncpg
 
     return await asyncpg.connect(**config.db_connect_kwargs())
@@ -55,7 +52,7 @@ async def embedding_mismatch(record: bool = False) -> str | None:
     import asyncpg
 
     current = config.embedding_signature()
-    connection = await _pool()
+    connection = await _connect()
     try:
         if record:
             await connection.execute(
@@ -80,16 +77,10 @@ async def embedding_mismatch(record: bool = False) -> str | None:
 
 
 def _on_disk(target: Path) -> tuple[int, int, int, int]:
-    """(markdown, skipped, human notes, generated notes) for a folder, counted from the files.
-
-    This is the "berapa jadi berapa" half of `pmb list`: what the folder holds against what the
-    database actually took, so a gap is visible instead of assumed away.
-    """
+    """(markdown, skipped, human notes, generated notes), counted from the files."""
     included, skipped = config.collect_documents(target)
     human = target / config.HUMAN
     name = config.namespace(target)
-    # Counted in the vault, not here: a digested folder is only ever read, so nothing this tool
-    # generated is inside it. Nothing below is a write path, and that is the point.
     written = sum(
         len(list(directory.rglob("*.md")))
         for sub in config.GENERATED_SUBDIRS
@@ -104,21 +95,14 @@ def _on_disk(target: Path) -> tuple[int, int, int, int]:
 
 
 async def status(target: Path, scan: bool = True) -> Status:
-    """Everything known about the memory: the database, and the folder it came from.
-
-    `scan=False` skips the disk walk, which is what a root wants: counting its markdown means
-    counting every child's, and the sum of things that were digested separately is not a number
-    that means anything.
-    """
-    config.configure()
+    """The database, and the folder it came from. `scan=False` skips the disk walk."""
+    import asyncpg
 
     target = target.resolve()
     name = config.namespace(target)
     markdown, skipped, human, generated = _on_disk(target) if scan else (0, 0, 0, 0)
 
-    import asyncpg
-
-    connection = await _pool()
+    connection = await _connect()
     try:
         try:
             rows = await connection.fetch(
@@ -127,14 +111,12 @@ async def status(target: Path, scan: bool = True) -> Status:
                 "GROUP BY ds.name ORDER BY ds.name"
             )
         except asyncpg.exceptions.UndefinedTableError:
-            # Cognee creates its schema on the first `add`, so before any digest these tables
-            # do not exist. That is an empty brain, not a broken one.
+            # cognee creates its schema on the first digest: empty, not broken
             rows = []
         database = str(config.db_connect_kwargs()["database"])
         size = await connection.fetchval("SELECT pg_size_pretty(pg_database_size($1))", database)
 
-        # Cognee makes one table per collection, so the chunk total is the sum across every
-        # table carrying a vector column rather than a single count.
+        # One table per collection, so the chunk total sums every vector table
         chunks = 0
         for table in await connection.fetch(
             "SELECT DISTINCT table_name FROM information_schema.columns "
@@ -163,13 +145,66 @@ async def status(target: Path, scan: bool = True) -> Status:
     )
 
 
-async def reset(target: Path, everything: bool = False) -> ResetReport:
-    """Throw away the derived memory. Never the markdown.
+def _folder_lines(status: Status) -> list[str]:
+    lines = [
+        f"folder:    {status.target}",
+        f"memory:    {status.name}",
+        "",
+        f"markdown in the folder:   {status.markdown}",
+        f"  of which memory/:       {status.human_notes} (human-authored, survives a reset)",
+        f"  digested:               {status.ingested}",
+        f"  generated into graph/:  {status.generated_notes} (rebuilt by digest)",
+        f"  skipped as a secret:    {status.skipped}",
+    ]
+    if status.markdown != status.ingested:
+        lines.append(f"  {status.markdown - status.ingested} not digested. Digest this folder.")
+    return [*lines, ""]
 
-    `memory/` is what a person wrote and `pmb digest` can rebuild everything else from it, so
-    this deletes the database rows and this brain's generated notes in the vault, and stops.
-    """
-    config.configure()
+
+def _child_line(status: Status) -> str:
+    gap = "" if status.markdown == status.ingested else f"  ({status.markdown} not digested)"
+    if status.markdown == status.ingested and status.markdown:
+        gap = "  up to date"
+    return f"  {status.name:<26} {status.ingested:>4} of {status.markdown:>4} markdown{gap}"
+
+
+def _database_lines(status: Status, highlight: set[str]) -> list[str]:
+    lines = [
+        f"database:  {status.database} ({status.size}), {status.chunks} chunk(s) embedded",
+        f"embedding: {config.embedding_signature()}",
+    ]
+    if not status.datasets:
+        return [*lines, "           empty. Nothing has been digested yet."]
+    width = max(len(d.name) for d in status.datasets)
+    for row in status.datasets:
+        here = "  <-" if row.name in highlight else ""
+        lines.append(
+            f"           {row.name:<{width}}  {row.documents:>4} doc(s)  {row.created}{here}"
+        )
+    return lines
+
+
+async def describe(target: Path | None) -> str:
+    """What `status` and `pmb list` print: a folder, a root's children, or the database alone."""
+    if target is None:
+        return "\n".join(_database_lines(await status(config.WORKSPACE, scan=False), set()))
+
+    if config.role_of(target) == "root":
+        lines = [f"root:      {target}", ""]
+        names = set()
+        for path in config.children(target):
+            child = await status(path)
+            lines.append(_child_line(child))
+            names.add(child.name)
+        lines.append("")
+        return "\n".join(lines + _database_lines(await status(target, scan=False), names))
+
+    folder = await status(target)
+    return "\n".join(_folder_lines(folder) + _database_lines(folder, {folder.name}))
+
+
+async def reset(target: Path, everything: bool = False) -> ResetReport:
+    """Throw away the derived memory and this brain's generated notes. Never the markdown."""
     import cognee
 
     target = target.resolve()
@@ -178,7 +213,7 @@ async def reset(target: Path, everything: bool = False) -> ResetReport:
     if everything:
         await cognee.prune.prune_data()
         await cognee.prune.prune_system(graph=True, vector=True, metadata=True)
-        connection = await _pool()
+        connection = await _connect()
         try:
             # Nothing is embedded any more, so the next digest may use any model
             await connection.execute("DROP TABLE IF EXISTS pmb_meta")
@@ -186,7 +221,7 @@ async def reset(target: Path, everything: bool = False) -> ResetReport:
             await connection.close()
         documents = -1
     else:
-        connection = await _pool()
+        connection = await _connect()
         try:
             rows = await connection.fetch(
                 "SELECT dd.data_id, dd.dataset_id FROM dataset_data dd "
@@ -197,26 +232,25 @@ async def reset(target: Path, everything: bool = False) -> ResetReport:
             await connection.close()
         if not rows:
             raise SystemExit(
-                f"nothing named {name!r} in the database. `pmb list` shows what is there."
+                f"nothing named {name!r} in the database. `status` shows what is there."
             )
-        # cognee's own delete, not a DELETE statement: the rows in Postgres are three stores at
-        # once, and removing the relational row by hand orphans the vectors and the graph nodes.
+        # cognee's own delete: one row is three stores, and a raw DELETE orphans two of them
         for row in rows:
             await cognee.delete(data_id=row["data_id"], dataset_id=row["dataset_id"], mode="hard")
         documents = len(rows)
 
-    # This brain's folder under each kind, never the kind folder itself: another brain's notes
-    # live beside it, and `graph/README.md` above it is hand-written and committed.
+    # This brain's folder only: other brains and the hand-written graph/README.md sit beside it
     removed = []
     for sub in config.GENERATED_SUBDIRS:
         directory = config.DOCS / config.GENERATED / sub / name
         if directory.is_dir():
             shutil.rmtree(directory)
             removed.append(directory)
+    graph = config.GRAPH_DIR / name
+    if graph.is_dir():
+        shutil.rmtree(graph)
+        removed.append(graph)
 
     return ResetReport(
-        scope="everything" if everything else name,
-        documents=documents,
-        generated=removed,
-        kept=(target / config.HUMAN) if (target / config.HUMAN).is_dir() else None,
+        scope="everything" if everything else name, documents=documents, generated=removed
     )

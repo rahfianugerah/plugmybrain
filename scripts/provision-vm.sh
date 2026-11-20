@@ -45,4 +45,4 @@ install -d -m 700 /opt/plugmybrain
 install -d -m 700 /var/backups/plugmybrain
 
 echo "provisioned: ${SWAP_GB}G swap, ${disk_gb}G disk, timezone ${TZ_NAME}, docker enabled at boot"
-echo "next: put the repo in /opt/plugmybrain, write /opt/plugmybrain/.env (chmod 600), then docker compose up -d"
+echo "next: put the repo in /opt/plugmybrain, write /opt/plugmybrain/.env (chmod 600), then docker compose up -d postgres"

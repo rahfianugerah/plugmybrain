@@ -1,14 +1,20 @@
 # The guards that matter: never write outside the generated area, never ingest a secret,
-# never miscount what the folder holds.
+# never read outside the workspace, never mix two brains or two embedding models.
 from pathlib import Path
 
 import pytest
 
-from plugmybrain import bootstrap, config, ingest, manage, retrieve
+from plugmybrain import bootstrap, cli, config, ingest, manage, retrieve
 
 
 def test_namespace_is_the_lowercased_directory_name():
     assert config.namespace(Path("C:/some/Path/My-Project")) == "my-project"
+
+
+def test_the_workspace_itself_is_named_after_the_host_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "WORKSPACE", tmp_path)
+    monkeypatch.setenv("PMB_WORKSPACE", "C:/Users/me/Projects")
+    assert config.namespace(tmp_path) == "projects"
 
 
 def test_generated_path_lands_in_the_vault_under_the_brains_name():
@@ -18,8 +24,7 @@ def test_generated_path_lands_in_the_vault_under_the_brains_name():
 
 
 def test_generated_path_refuses_to_escape():
-    # The one that matters: `memory/` is human-authored and sits in the same vault, so a
-    # rebuild that could climb out of graph/ could overwrite a note somebody wrote.
+    # memory/ sits in the same vault, written by hand
     with pytest.raises(ValueError):
         config.generated_path("code", "../../memory", "stolen.md")
     with pytest.raises(ValueError):
@@ -42,9 +47,7 @@ def test_secret_directories_are_excluded(directory):
 def test_the_generated_area_is_never_digested_back_into_itself(tmp_path):
     assert config.is_excluded(Path("/project") / config.GENERATED / "code" / "report.md")
 
-    # And it is not reported as a refused secret either. The vault holds both the notes to
-    # digest and the notes a digest produced, so "skipped" would otherwise accuse the tool's
-    # own output of looking like a leaked key.
+    # Nor reported as a refused secret
     (tmp_path / config.GENERATED / "code").mkdir(parents=True)
     (tmp_path / config.GENERATED / "code" / "report.md").write_text("#", encoding="utf-8")
     (tmp_path / "real.md").write_text("#", encoding="utf-8")
@@ -66,7 +69,7 @@ def test_collect_documents_takes_markdown_and_reports_the_secrets_it_refused(tmp
 
     included, skipped = config.collect_documents(tmp_path)
 
-    # Source is Graphify's job, so .py is neither digested nor reported as a blocked secret.
+    # Source is Graphify's job, so .py is neither digested nor reported
     assert [p.name for p in included] == ["keep.md"]
     assert {p.name for p in skipped} == {".env", "leak.md"}
 
@@ -84,8 +87,6 @@ def test_the_counts_read_generated_notes_from_the_vault(tmp_path, monkeypatch):
 
     markdown, skipped, human, generated = manage._on_disk(project)
 
-    # Two markdown in the folder, and the generated note counted from the vault rather than
-    # from the folder, which is never written to.
     assert (markdown, human, generated, skipped) == (2, 1, 1, 0)
 
 
@@ -93,9 +94,7 @@ def test_dimension_guard_matches_the_pgvector_index_ceiling():
     assert config.MAX_INDEXABLE_DIMENSIONS == 2000
 
 
-# pgvector sizes IVFFlat at lists = rows / 1000, so a small table would get a one-list index,
-# which is a sequential scan carrying index overhead. Exact search has to win below the
-# threshold or the whole choice is theatre.
+# Below the threshold IVFFlat gets one list, a sequential scan with overhead
 @pytest.mark.parametrize(
     ("rows", "expected"),
     [(0, "exact"), (500, "exact"), (9_999, "exact"), (10_000, "ivfflat"), (250_000, "ivfflat")],
@@ -110,69 +109,56 @@ def test_an_explicit_index_choice_is_never_overridden(kind):
     assert ingest.choose_index(5_000_000, kind=kind) == kind
 
 
-def test_a_root_digests_its_brain_before_anything_else(tmp_path, monkeypatch):
-    """Everything else is read against the rules, so a half-finished run still leaves a brain."""
+def test_a_root_digests_its_brain_before_anything_else(tmp_path):
     for name in ("zeta-service", "the-rules", "alpha-service"):
         (tmp_path / name).mkdir()
         (tmp_path / name / "README.md").write_text("#", encoding="utf-8")
     (tmp_path / "empty").mkdir()
-    monkeypatch.setattr(config, "DOCS", tmp_path / "vault")
-    bootstrap.init(tmp_path / "the-rules", "brain", wire=False)
+    (tmp_path / "the-rules" / config.MARKER).write_text("brain\n", encoding="utf-8")
 
-    assert [p.name for p in bootstrap.children(tmp_path)] == [
+    assert config.role_of(tmp_path / "the-rules") == "brain"
+    assert [p.name for p in config.children(tmp_path)] == [
         "the-rules",
         "alpha-service",
         "zeta-service",
     ]
 
 
-def test_init_drops_a_command_this_project_no_longer_ships(tmp_path):
-    """A command that outlives its action keeps offering it. `/pmb-note` called `pmb note`."""
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    for name in ("pmb.md", "pmb-map.md", "pmb-note.md", "my-own-command.md"):
-        (commands / name).write_text("#", encoding="utf-8")
-
-    stale = bootstrap._stale_commands(commands, {"pmb.md", "pmb-map.md"})
-
-    # Only the `pmb` namespace, and only what `agents/` no longer holds.
-    assert [path.name for path in stale] == ["pmb-note.md"]
+@pytest.fixture
+def workspace(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "work" / "billing").mkdir(parents=True)
+    return tmp_path
 
 
-def test_a_folder_will_not_silently_change_role(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DOCS", tmp_path / "vault")
-    bootstrap.init(tmp_path, "brain", wire=False)
-    assert bootstrap.role_of(tmp_path) == "brain"
-    with pytest.raises(SystemExit):
-        bootstrap.init(tmp_path, "root", wire=False)
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("C:\\Users\\me\\Projects\\docs", "docs"),
+        ("C:/Users/me/Projects/work/billing/", "work/billing"),
+        ("c:\\users\\me\\projects\\docs", "docs"),
+        ("/c/Users/me/Projects/work/billing", "work/billing"),
+        ("work/billing", "work/billing"),
+        ("C:/Users/me/Projects", ""),
+    ],
+)
+def test_a_host_path_maps_into_the_workspace(workspace, given, expected):
+    resolved = config.resolve_folder(given, host_root="C:/Users/me/Projects", mount=workspace)
+    assert resolved == (workspace / expected).resolve()
 
 
-def test_init_scaffolds_a_brain_without_overwriting_what_is_there(tmp_path, monkeypatch):
-    brain, vault = tmp_path / "brain", tmp_path / "vault"
-    (brain / config.HUMAN).mkdir(parents=True)
-    (brain / config.HUMAN / "README.md").write_text("mine", encoding="utf-8")
-    vault.mkdir()
-    (vault / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
-    monkeypatch.setattr(config, "DOCS", vault)
-
-    bootstrap.init(brain, "brain", wire=False)
-
-    assert (brain / config.HUMAN / "README.md").read_text(encoding="utf-8") == "mine"
-    for note_type in bootstrap.NOTE_TYPES:
-        assert (brain / config.HUMAN / note_type).is_dir()
-    # Nothing generated is written into the brain: a digested folder is only ever read.
-    assert not (brain / config.GENERATED).exists()
-    ignored = (vault / ".gitignore").read_text(encoding="utf-8")
-    assert "node_modules/" in ignored and "graph/code/" in ignored
+def test_a_path_already_inside_the_mount_is_kept(workspace):
+    inside = (workspace / "docs").as_posix()
+    assert config.resolve_folder(inside, host_root="C:/x", mount=workspace) == workspace / "docs"
 
 
-def test_a_chunk_belongs_to_a_brain_by_id_not_by_file_name():
-    # Two brains both holding a README.md must not answer for each other
-    ids, titles = {"id-in-docs"}, {"README"}
-    assert retrieve.belongs({"document_id": "id-in-docs", "document_name": "README"}, ids, titles)
-    assert not retrieve.belongs(
-        {"document_id": "id-in-standard", "document_name": "README"}, ids, titles
-    )
+@pytest.mark.parametrize(
+    "given",
+    ["C:/Users/me/Elsewhere/docs", "/home/me/docs", "../outside", "docs/../../outside", "missing"],
+)
+def test_nothing_outside_the_workspace_is_reachable(workspace, given):
+    with pytest.raises(ValueError):
+        config.resolve_folder(given, host_root="C:/Users/me/Projects", mount=workspace)
 
 
 @pytest.fixture
@@ -212,3 +198,44 @@ def test_the_embedding_signature_changes_with_the_model(monkeypatch):
     local = config.embedding_signature()
     monkeypatch.setenv("EMBEDDING_PROVIDER", "voyage")
     assert config.embedding_signature() != local
+
+
+def test_a_chunk_belongs_to_a_brain_by_id_not_by_file_name():
+    # Two brains both holding a README.md must not answer for each other
+    ids, titles = {"id-in-docs"}, {"README"}
+    assert retrieve.belongs({"document_id": "id-in-docs", "document_name": "README"}, ids, titles)
+    assert not retrieve.belongs(
+        {"document_id": "id-in-standard", "document_name": "README"}, ids, titles
+    )
+
+
+def test_setup_installs_every_command_and_drops_the_retired_ones(tmp_path):
+    home = tmp_path / "home"
+    old = home / ".claude" / "commands"
+    old.mkdir(parents=True)
+    for name in ("pmb.md", "pmb-note.md", "my-own-command.md"):
+        (old / name).write_text("#", encoding="utf-8")
+
+    report = bootstrap.setup(home=home, wire=False)
+
+    shipped = {path.name for path in bootstrap.COMMANDS.glob("pmb*.md")}
+    for agent in (home / ".claude" / "commands", home / ".codex" / "prompts"):
+        assert shipped <= {path.name for path in agent.iterdir()}
+    # Only the pmb namespace is cleaned, never a command somebody wrote
+    assert {path.name for path in report.removed} == {"pmb.md", "pmb-note.md"}
+    assert (old / "my-own-command.md").exists()
+
+
+def test_the_vault_scaffold_never_overwrites(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    (vault / config.GENERATED).mkdir(parents=True)
+    (vault / config.GENERATED / "README.md").write_text("mine", encoding="utf-8")
+    (vault / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    monkeypatch.setattr(config, "DOCS", vault)
+
+    cli.ensure_vault()
+    cli.ensure_vault()
+
+    assert (vault / config.GENERATED / "README.md").read_text(encoding="utf-8") == "mine"
+    ignored = (vault / ".gitignore").read_text(encoding="utf-8")
+    assert "node_modules/" in ignored and ignored.count("graph/code/") == 1

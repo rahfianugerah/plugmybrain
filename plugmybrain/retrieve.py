@@ -1,24 +1,15 @@
-# Retrieval. Chunks only: this is a RAG for a coding agent, which already has a model and does
-# not need a second one writing prose over the results.
+# Retrieval. Chunks and their sources only: the agent asking already has a model.
 from __future__ import annotations
 
 from plugmybrain import config
 
-# Cognee keeps every memory in one vector collection and its `datasets` argument does not scope
-# the search, so a query for one project returns another's documents. Postgres does know which
-# document belongs where, so membership is enforced here. Over-fetching gives the filter
-# something to cut: ask for more than requested, keep only this memory's, then trim.
+# cognee's `datasets` argument does not scope a search, so fetch more and filter here
 OVERFETCH = 6
 MAX_OVERFETCH = 200
 
 
 async def _fetch(sql: str, *args) -> list:
-    """Query Postgres, treating "no tables yet" as "nothing digested yet".
-
-    Cognee creates its schema on the first `add`, so before any digest these tables genuinely do
-    not exist. Left to asyncpg the agent's first call answers `relation "datasets" does not
-    exist`, which reads as a broken install rather than an empty one.
-    """
+    """Query Postgres, treating "no tables yet" as "nothing digested yet"."""
     import asyncpg
 
     connection = await asyncpg.connect(**config.db_connect_kwargs())
@@ -31,7 +22,7 @@ async def _fetch(sql: str, *args) -> list:
 
 
 async def brains() -> list[tuple[str, int]]:
-    """Every memory in the database and how many documents it holds, for `/pmb-map`."""
+    """Every memory in the database and how many documents it holds."""
     rows = await _fetch(
         "SELECT ds.name, count(dd.data_id) AS documents FROM datasets ds "
         "LEFT JOIN dataset_data dd ON dd.dataset_id = ds.id "
@@ -53,7 +44,7 @@ async def members(names: list[str]) -> tuple[set[str], set[str]]:
 
 
 def names(brain: str | list[str]) -> list[str]:
-    """One memory or several. A comma-separated string is how a tool argument passes a set."""
+    """One memory or several; a tool argument passes a set comma-separated."""
     values = brain if isinstance(brain, list) else brain.split(",")
     chosen = [value.strip().lower() for value in values if value.strip()]
     if not chosen:
@@ -75,17 +66,13 @@ def belongs(item: object, ids: set[str], titles: set[str]) -> bool:
 
 
 def sources(results: list) -> list[str]:
-    """The files a result set came from, in order, de-duplicated.
-
-    Cognee returns `document_name` without an extension, so `commit.rules` becomes
-    `commit.rules.md`. Not `Path().suffix`: `commit.rules` already has one (`.rules`), so a
-    suffix test silently leaves the vault's own naming convention without its extension.
-    """
+    """The files a result set came from, in order, de-duplicated, with `.md` restored."""
     seen: list[str] = []
     for item in results:
         name = item.get("document_name") if isinstance(item, dict) else None
         if not isinstance(name, str) or not name:
             continue
+        # Not Path.suffix: `commit.rules` already has one
         if not name.lower().endswith(tuple(config.DOCUMENT_SUFFIXES)):
             name = f"{name}.md"
         if name not in seen:
@@ -102,9 +89,6 @@ async def search(query: str, brain: str | list[str], top_k: int = 15) -> list[di
     if problem:
         raise ValueError(problem)
 
-    import cognee
-    from cognee import SearchType
-
     ids, titles = await members(chosen)
     if not ids:
         raise ValueError(
@@ -112,9 +96,10 @@ async def search(query: str, brain: str | list[str], top_k: int = 15) -> list[di
             "it is the folder's own name, lowercased."
         )
 
-    # Deliberately without only_context: that flag collapses the hits into one joined string and
-    # throws away the per-chunk metadata, so nothing downstream can say which file an answer
-    # came from, and the filter below would have nothing to work with.
+    import cognee
+    from cognee import SearchType
+
+    # Not only_context: that joins the hits into one string and drops which file each came from
     results = await cognee.search(
         query_text=query,
         query_type=SearchType.CHUNKS,
