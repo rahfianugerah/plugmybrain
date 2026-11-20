@@ -2,7 +2,7 @@
 [project]
 name = "plugmybrain"
 version = "0.1.0"
-description = "A plug-and-play memory brain: Graphify code maps, Cognee knowledge graph, Obsidian control plane"
+description = "A plug-and-play memory for coding agents over MCP: markdown memory in Postgres and pgvector by Cognee, code maps by Graphify, driven by /pmb slash commands"
 requires-python = ">=3.13"
 
 [project.scripts]
