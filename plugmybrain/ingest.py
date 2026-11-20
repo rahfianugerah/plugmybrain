@@ -1,28 +1,28 @@
-# Ingestion: add, cognify, index. This file is `pmb ingest`, `pmb sync`, and the one-shot
-# `cognee-ingest` container. Never co-resident with serving on a 2 GiB VM.
+# Ingestion: add, chunk, embed, then the vector index cognee does not create.
 from __future__ import annotations
 
-import inspect
+import hashlib
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from plugmybrain import config
 
-# Table and column names come from information_schema, never from a user, but Postgres will not
-# bind an identifier so they still reach the DDL by interpolation. The allowlist is what makes
-# that safe, and anything it rejects is reported rather than skipped in silence.
+# Table and column names reach DDL by interpolation, so they must pass this allowlist
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 HNSW_M = 16
 HNSW_EF_CONSTRUCTION = 64
 HNSW_EF_SEARCH = 64
 
-# pgvector's own sizing guidance: lists = rows / 1000 up to a million rows.
+# pgvector's sizing guidance: lists = rows / 1000
 IVFFLAT_ROWS_PER_LIST = 1000
 
-# `WITH (lists='100')` inside pg_indexes.indexdef, so a stale index can be spotted.
+# Characters per chunk, so a hit points at a paragraph rather than a page
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1500"))
+
 _LISTS = re.compile(r"lists\s*=\s*'?(\d+)'?")
 
 
@@ -35,17 +35,11 @@ class IngestReport:
     indexes_skipped: list[str] = field(default_factory=list)
     indexes_rebuild_due: list[str] = field(default_factory=list)
     indexes_refused: list[str] = field(default_factory=list)
-    estimate: object | None = None
+    duplicates: list[str] = field(default_factory=list)
 
 
 def choose_index(rows: int, kind: str = config.INDEX_KIND) -> str:
-    """Which index a table of `rows` vectors should get: exact, ivfflat or hnsw.
-
-    `exact` means no index at all. Below the threshold that is the right answer, not a
-    concession: pgvector sizes IVFFlat at lists = rows / 1000, so a few hundred chunks would
-    produce a single-list index, which is a sequential scan carrying index overhead. Exact
-    search over the same rows is faster and has perfect recall.
-    """
+    """exact, ivfflat or hnsw. Below the threshold an IVFFlat index is a scan with overhead."""
     if kind != "auto":
         return kind
     return "exact" if rows < config.FLAT_THRESHOLD else "ivfflat"
@@ -54,12 +48,8 @@ def choose_index(rows: int, kind: str = config.INDEX_KIND) -> str:
 async def ensure_vector_index() -> IngestReport:
     """Give every pgvector column the index its row count deserves, and say which and why.
 
-    Cognee's pgvector adapter creates the table and the vector column but no index at all, and
-    it creates a new table per collection. So this runs after every ingest rather than once:
-    a one-time CREATE INDEX goes stale the moment a new dataset appears.
-
-    Runs after the data is loaded, which IVFFlat requires. It has a training step, so an
-    IVFFlat index built on an empty table has near-useless recall and fails silently.
+    Runs after every ingest: cognee makes a table per collection with no index, and IVFFlat
+    trained on an empty table has near-useless recall.
     """
     import asyncpg
 
@@ -89,9 +79,7 @@ async def ensure_vector_index() -> IngestReport:
 
             if table in existing:
                 match = _LISTS.search(existing[table])
-                # An IVFFlat sized for a tenth of the current rows still answers, just badly.
-                # Reported rather than rebuilt: dropping an index on a live database unasked
-                # is not a thing to do.
+                # Reported, not rebuilt: dropping an index on a live database unasked is not ours
                 if match and count > int(match.group(1)) * IVFFLAT_ROWS_PER_LIST * 10:
                     report.indexes_rebuild_due.append(
                         f"{table} has {count} rows against lists={match.group(1)}"
@@ -103,8 +91,7 @@ async def ensure_vector_index() -> IngestReport:
                 report.indexes_skipped.append(f"{table} ({count} rows, exact search is faster)")
                 continue
 
-            # vector_cosine_ops, not the vector_l2_ops default: cognee searches by cosine
-            # distance, and an index built for the wrong operator is never used.
+            # cosine, not the l2 default: cognee searches by cosine and ignores an l2 index
             if kind == "ivfflat":
                 lists = max(1, count // IVFFLAT_ROWS_PER_LIST)
                 index = f"{table}_{column}_ivfflat"
@@ -123,8 +110,7 @@ async def ensure_vector_index() -> IngestReport:
                 report.indexes_created.append(f"{index} ({count} rows)")
             built.add(kind)
 
-        # Cognee opens its own connections, so neither probes nor ef_search can be set per
-        # session. Both default to a value tuned for speed over recall.
+        # cognee opens its own connections, so search depth is set on the database
         database = str(config.db_connect_kwargs()["database"])
         if not _IDENTIFIER.match(database):
             report.indexes_refused.append(f"database {database}: search depth not set")
@@ -144,51 +130,67 @@ async def ensure_vector_index() -> IngestReport:
     return report
 
 
-async def _memify(cognee, dataset: str) -> None:
-    """cognee 1.4.2 exports memify, but its definition could not be located to pin the
-    signature, so the accepted arguments are read off the installed function."""
-    parameters = inspect.signature(cognee.memify).parameters
-    await cognee.memify(**({"datasets": [dataset]} if "datasets" in parameters else {}))
+async def _pipeline():
+    """cognee's default pipeline minus extract_graph_and_summarize, the one chat-model step.
 
-
-async def ingest(
-    paths: list[Path],
-    dataset: str,
-    dry_run: bool = False,
-    memify: bool = False,
-) -> IngestReport:
-    """Ingest every document under `paths` into `dataset`, then index it.
-
-    Idempotent: cognee loads incrementally, and ensure_vector_index only creates what is
-    missing.
+    That step was the whole bill. Dropping it keeps chunking and embedding, which is all
+    retrieval needs, and gives up the entity graph.
     """
-    config.configure()
+    from cognee.modules.chunking.TextChunker import TextChunker
+    from cognee.modules.pipelines.tasks.task import Task
+    from cognee.tasks.documents import classify_documents, extract_chunks_from_documents
+    from cognee.tasks.storage import add_data_points
+
+    return [
+        Task(classify_documents),
+        Task(extract_chunks_from_documents, max_chunk_size=CHUNK_SIZE, chunker=TextChunker),
+        Task(add_data_points, task_config={"batch_size": 2000}),
+    ]
+
+
+async def ingest(target: Path, dataset: str) -> IngestReport:
+    """Ingest every markdown file under `target` into `dataset`, then index it. Idempotent."""
     import cognee
+    from cognee.modules.pipelines import run_pipeline
 
-    documents: list[Path] = []
-    skipped: list[Path] = []
-    for root in paths:
-        if not root.is_dir():
-            raise SystemExit(f"not a directory: {root}")
-        found, blocked = config.collect_documents(root)
-        documents.extend(found)
-        skipped.extend(blocked)
+    from plugmybrain import manage
 
+    if not target.is_dir():
+        raise SystemExit(f"not a directory: {target}")
+    documents, skipped = config.collect_documents(target)
     if not documents:
-        raise SystemExit(f"no documents found under: {', '.join(str(p) for p in paths)}")
+        raise SystemExit(f"no markdown found under {target}, so there is nothing to remember.")
 
-    report = IngestReport(dataset=dataset, ingested=len(documents), skipped=skipped)
+    problem = await manage.embedding_mismatch(record=True)
+    if problem:
+        raise SystemExit(problem)
 
-    # add chunks and stores; cognify is the pass that calls the model. Estimating after the
-    # add and before the cognify is what makes --dry-run tell you the real cost.
-    await cognee.add([str(path) for path in documents], dataset_name=dataset)
-    if dry_run:
-        report.estimate = await cognee.cognify(datasets=[dataset], dry_run=True)
-        return report
+    # Identical bytes make cognee attach one Data row twice and die in SQLAlchemy
+    duplicates: list[str] = []
+    seen: dict[str, Path] = {}
+    unique: list[Path] = []
+    for path in documents:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        first = seen.get(digest)
+        if first is None:
+            seen[digest] = path
+            unique.append(path)
+        else:
+            duplicates.append(f"{path.name} is identical to {first.name}")
 
-    await cognee.cognify(datasets=[dataset])
-    if memify:
-        await _memify(cognee, dataset)
+    report = IngestReport(dataset=dataset, ingested=len(unique), skipped=skipped)
+    report.duplicates = duplicates
+
+    await cognee.add([str(path) for path in unique], dataset_name=dataset)
+
+    # run_pipeline, not cognify: cognify hardcodes the chat-model step. Drained to the end
+    async for _ in run_pipeline(
+        tasks=await _pipeline(),
+        datasets=[dataset],
+        pipeline_name="pmb_pipeline",
+        incremental_loading=True,
+    ):
+        pass
 
     indexes = await ensure_vector_index()
     report.indexes_created = indexes.indexes_created
