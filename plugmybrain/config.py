@@ -135,22 +135,18 @@ def collect_documents(root: Path) -> tuple[list[Path], list[Path]]:
     root = root.resolve()
     included: list[Path] = []
     skipped: list[Path] = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        document = path.suffix.lower() in DOCUMENT_SUFFIXES
-        if not is_excluded(path):
-            if document:
-                included.append(path)
-        # Only a refusal a person would want to hear about: markdown that would otherwise have
-        # been digested, or a file whose NAME matches a secret pattern whatever its suffix.
-        # Reporting every file under .git and node_modules as "skipped" buries the one .env
-        # that matters under a few hundred lines of nothing, and `graph/` is skipped by design
-        # rather than refused: digesting the model's own output is how a graph cites itself.
-        elif GENERATED in path.parts:
-            continue
-        elif document or any(fnmatch.fnmatch(path.name, p) for p in EXCLUDED_NAMES):
-            skipped.append(path)
+    for directory, subdirs, files in os.walk(root):
+        # Pruned, never walked: node_modules and .git are most of a repository. keys/ is
+        # walked so what it holds is reported
+        subdirs[:] = sorted(d for d in subdirs if d not in EXCLUDED_DIRS or d == "keys")
+        for name in sorted(files):
+            path = Path(directory) / name
+            document = path.suffix.lower() in DOCUMENT_SUFFIXES
+            if not is_excluded(path):
+                if document:
+                    included.append(path)
+            elif document or any(fnmatch.fnmatch(name, p) for p in EXCLUDED_NAMES):
+                skipped.append(path)
     return included, skipped
 
 
