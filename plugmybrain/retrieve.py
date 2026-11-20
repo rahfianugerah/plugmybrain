@@ -95,7 +95,12 @@ def sources(results: list) -> list[str]:
 
 async def search(query: str, brain: str | list[str], top_k: int = 15) -> list[dict]:
     """Search one memory, or several, and return only chunks that really belong to them."""
+    from plugmybrain import manage
+
     chosen = names(brain)
+    problem = await manage.embedding_mismatch()
+    if problem:
+        raise ValueError(problem)
 
     import cognee
     from cognee import SearchType

@@ -65,6 +65,9 @@ services:
       # person's brain behind an SSH tunnel, so both are off: the tunnel is the boundary.
       REQUIRE_AUTHENTICATION: "false"
       ENABLE_BACKEND_ACCESS_CONTROL: "false"
+    # Ollama on the host, on Linux as well as Docker Desktop
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Docker kills this before the kernel picks a victim by size, which would be Postgres.
     mem_limit: 900m
     ports:
@@ -103,6 +106,8 @@ services:
       ENABLE_BACKEND_ACCESS_CONTROL: "false"
       # Where every generated note lands, for every brain. Mounted below.
       PMB_DOCS: /docs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     mem_limit: 1200m
     volumes:
       - pmb-cognee:/data

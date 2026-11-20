@@ -203,6 +203,12 @@ async def ingest(target: Path, dataset: str) -> IngestReport:
             "none has nothing to remember."
         )
 
+    from plugmybrain import manage
+
+    problem = await manage.embedding_mismatch(record=True)
+    if problem:
+        raise SystemExit(problem)
+
     # Two files with identical bytes make cognee build one Data row and then attach it to the
     # dataset twice, which dies in SQLAlchemy's identity map. This project causes it on purpose:
     # CLAUDE.md and AGENTS.md are kept byte-identical so neither agent reads a different rule.

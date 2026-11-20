@@ -47,6 +47,38 @@ async def _pool():
     return await asyncpg.connect(**config.db_connect_kwargs())
 
 
+async def embedding_mismatch(record: bool = False) -> str | None:
+    """Why this database must not be read or written with the current model, or None.
+
+    `record` stores the current model on first use; a read never writes.
+    """
+    import asyncpg
+
+    current = config.embedding_signature()
+    connection = await _pool()
+    try:
+        if record:
+            await connection.execute(
+                "CREATE TABLE IF NOT EXISTS pmb_meta (key text PRIMARY KEY, value text NOT NULL)"
+            )
+        try:
+            stored = await connection.fetchval("SELECT value FROM pmb_meta WHERE key = 'embedding'")
+        except asyncpg.exceptions.UndefinedTableError:
+            stored = None
+        if stored is None and record:
+            await connection.execute("INSERT INTO pmb_meta VALUES ('embedding', $1)", current)
+    finally:
+        await connection.close()
+
+    if stored and stored != current:
+        return (
+            f"this database was embedded with {stored}, and the embedding is now {current}. "
+            "Vectors from two models rank each other wrong without any error. Switch back, or "
+            "reset every brain and digest again."
+        )
+    return None
+
+
 def _on_disk(target: Path) -> tuple[int, int, int, int]:
     """(markdown, skipped, human notes, generated notes) for a folder, counted from the files.
 
@@ -146,6 +178,12 @@ async def reset(target: Path, everything: bool = False) -> ResetReport:
     if everything:
         await cognee.prune.prune_data()
         await cognee.prune.prune_system(graph=True, vector=True, metadata=True)
+        connection = await _pool()
+        try:
+            # Nothing is embedded any more, so the next digest may use any model
+            await connection.execute("DROP TABLE IF EXISTS pmb_meta")
+        finally:
+            await connection.close()
         documents = -1
     else:
         connection = await _pool()

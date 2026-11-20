@@ -173,3 +173,42 @@ def test_a_chunk_belongs_to_a_brain_by_id_not_by_file_name():
     assert not retrieve.belongs(
         {"document_id": "id-in-standard", "document_name": "README"}, ids, titles
     )
+
+
+@pytest.fixture
+def no_dotenv(tmp_path, monkeypatch):
+    # configure() would otherwise load this checkout's real .env
+    monkeypatch.setattr(config, "REPO_ROOT", tmp_path)
+    for key, value in {
+        "DB_HOST": "db",
+        "DB_NAME": "pmb",
+        "DB_USERNAME": "pmb",
+        "DB_PASSWORD": "placeholder",
+        "EMBEDDING_DIMENSIONS": "1024",
+    }.items():
+        monkeypatch.setenv(key, value)
+    for key in ("EMBEDDING_API_KEY", "EMBEDDING_ENDPOINT"):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_ollama_needs_no_key_and_finds_the_host(no_dotenv, monkeypatch):
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "ollama")
+    monkeypatch.setenv("EMBEDDING_MODEL", "bge-m3")
+    config.configure()
+    assert config.os.environ["EMBEDDING_ENDPOINT"] == config.OLLAMA_ENDPOINT
+
+
+def test_an_embedding_api_without_a_key_refuses_to_start(no_dotenv, monkeypatch):
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "voyage")
+    monkeypatch.setenv("EMBEDDING_MODEL", "voyage/voyage-3.5")
+    with pytest.raises(SystemExit, match="EMBEDDING_API_KEY"):
+        config.configure()
+
+
+def test_the_embedding_signature_changes_with_the_model(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "ollama")
+    monkeypatch.setenv("EMBEDDING_MODEL", "bge-m3")
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "1024")
+    local = config.embedding_signature()
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "voyage")
+    assert config.embedding_signature() != local

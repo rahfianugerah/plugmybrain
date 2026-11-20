@@ -54,6 +54,10 @@ INDEX_KIND = os.getenv("PMB_INDEX", "auto")
 # lists = rows / 1000, so a small table gets one list, which is a sequential scan plus overhead.
 FLAT_THRESHOLD = int(os.getenv("PMB_INDEX_THRESHOLD", "10000"))
 
+# Embedding providers that run on this machine and need no key
+LOCAL_PROVIDERS = frozenset({"ollama"})
+OLLAMA_ENDPOINT = "http://host.docker.internal:11434/api/embed"
+
 # Markdown only. Obsidian is the viewer, markdown is the substrate, and code structure is
 # Graphify's job: ingesting source would pay a model to rediscover what the map already has.
 DOCUMENT_SUFFIXES = frozenset({".md"})
@@ -161,6 +165,14 @@ def db_connect_kwargs() -> dict[str, object]:
     }
 
 
+def embedding_signature() -> str:
+    """Which model built the vectors. Two models in one database rank each other wrong."""
+    return ":".join(
+        os.environ.get(key, "")
+        for key in ("EMBEDDING_PROVIDER", "EMBEDDING_MODEL", "EMBEDDING_DIMENSIONS")
+    )
+
+
 def configure() -> None:
     """Load `.env`, set the invariants, and fail fast on a bad setup.
 
@@ -193,20 +205,33 @@ def configure() -> None:
     # error, which says more than "connection test timed out" ever did.
     os.environ.setdefault("COGNEE_SKIP_CONNECTION_TEST", "true")
 
-    missing = [
-        key for key in ("DB_HOST", "DB_NAME", "DB_USERNAME", "DB_PASSWORD") if not os.getenv(key)
-    ]
+    required = (
+        "DB_HOST",
+        "DB_NAME",
+        "DB_USERNAME",
+        "DB_PASSWORD",
+        "EMBEDDING_PROVIDER",
+        "EMBEDDING_MODEL",
+    )
+    missing = [key for key in required if not os.getenv(key)]
     if missing:
         raise SystemExit(
             f"missing in .env: {', '.join(missing)}. Copy .env.example and fill it in."
         )
 
-    # The only key this project needs. Voyage is an embedding vendor and has no chat model,
-    # which is the point: there is nothing here that could run up a chat bill.
-    if not os.getenv("EMBEDDING_API_KEY"):
-        raise SystemExit("EMBEDDING_API_KEY is not set. Voyage embeds the markdown.")
+    # The embedding is the only model here: an API with a key, or Ollama on this machine
+    provider = os.environ["EMBEDDING_PROVIDER"].lower()
+    if provider in LOCAL_PROVIDERS:
+        if not os.getenv("EMBEDDING_ENDPOINT"):
+            os.environ["EMBEDDING_ENDPOINT"] = OLLAMA_ENDPOINT
+    elif not os.getenv("EMBEDDING_API_KEY"):
+        raise SystemExit(
+            f"EMBEDDING_API_KEY is not set, and {provider} is an API. Set it, or use "
+            "EMBEDDING_PROVIDER=ollama to embed on this machine."
+        )
 
-    dimensions = int(os.environ.setdefault("EMBEDDING_DIMENSIONS", "1024"))
+    dimensions = int(os.getenv("EMBEDDING_DIMENSIONS") or "1024")
+    os.environ["EMBEDDING_DIMENSIONS"] = str(dimensions)
     if dimensions > MAX_INDEXABLE_DIMENSIONS:
         raise SystemExit(
             f"EMBEDDING_DIMENSIONS={dimensions} exceeds {MAX_INDEXABLE_DIMENSIONS}, the widest "
