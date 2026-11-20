@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from plugmybrain import bootstrap, config, ingest, manage
+from plugmybrain import bootstrap, config, ingest, manage, retrieve
 
 
 def test_namespace_is_the_lowercased_directory_name():
@@ -164,3 +164,12 @@ def test_init_scaffolds_a_brain_without_overwriting_what_is_there(tmp_path, monk
     assert not (brain / config.GENERATED).exists()
     ignored = (vault / ".gitignore").read_text(encoding="utf-8")
     assert "node_modules/" in ignored and "graph/code/" in ignored
+
+
+def test_a_chunk_belongs_to_a_brain_by_id_not_by_file_name():
+    # Two brains both holding a README.md must not answer for each other
+    ids, titles = {"id-in-docs"}, {"README"}
+    assert retrieve.belongs({"document_id": "id-in-docs", "document_name": "README"}, ids, titles)
+    assert not retrieve.belongs(
+        {"document_id": "id-in-standard", "document_name": "README"}, ids, titles
+    )

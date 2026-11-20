@@ -40,16 +40,16 @@ async def brains() -> list[tuple[str, int]]:
     return [(row["name"], row["documents"]) for row in rows]
 
 
-async def documents(names: list[str]) -> set[str]:
-    """The document names in these memories, from Postgres, which is the authority."""
+async def members(names: list[str]) -> tuple[set[str], set[str]]:
+    """(document ids, document names) in these memories, from Postgres, the authority."""
     rows = await _fetch(
-        "SELECT d.name FROM data d "
+        "SELECT d.id, d.name FROM data d "
         "JOIN dataset_data dd ON dd.data_id = d.id "
         "JOIN datasets ds ON ds.id = dd.dataset_id "
         "WHERE ds.name = ANY($1)",
         names,
     )
-    return {row["name"] for row in rows}
+    return {str(row["id"]) for row in rows}, {row["name"] for row in rows}
 
 
 def names(brain: str | list[str]) -> list[str]:
@@ -59,6 +59,19 @@ def names(brain: str | list[str]) -> list[str]:
     if not chosen:
         raise ValueError("no brain given")
     return chosen
+
+
+def belongs(item: object, ids: set[str], titles: set[str]) -> bool:
+    """True when a chunk comes from one of the chosen memories.
+
+    By document id, because two brains often share a file name such as README.md.
+    """
+    if not isinstance(item, dict):
+        return False
+    document_id = item.get("document_id")
+    if document_id:
+        return str(document_id) in ids
+    return item.get("document_name") in titles
 
 
 def sources(results: list) -> list[str]:
@@ -87,8 +100,8 @@ async def search(query: str, brain: str | list[str], top_k: int = 15) -> list[di
     import cognee
     from cognee import SearchType
 
-    members = await documents(chosen)
-    if not members:
+    ids, titles = await members(chosen)
+    if not ids:
         raise ValueError(
             f"no documents in {', '.join(chosen)}. Digest it first, or check the name: "
             "it is the folder's own name, lowercased."
@@ -103,5 +116,4 @@ async def search(query: str, brain: str | list[str], top_k: int = 15) -> list[di
         datasets=chosen,
         top_k=min(MAX_OVERFETCH, top_k * OVERFETCH * len(chosen)),
     )
-    kept = [r for r in results if isinstance(r, dict) and r.get("document_name") in members]
-    return kept[:top_k]
+    return [r for r in results if belongs(r, ids, titles)][:top_k]
