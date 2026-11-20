@@ -1,11 +1,8 @@
-# The laptop side of the link to the VM. One SSH session carries both ports and restarts if it
-# drops. Uses gcloud and the built-in Windows OpenSSH client; nothing new is installed.
+# The laptop side of the link to Postgres on the VM. One SSH session, restarted if it drops.
+# The MCP server stays on the laptop, where the folders it digests are.
 #
-#   8000 -> the Cognee MCP server, what Claude Code and Codex connect to
-#  15432 -> Postgres, what `pmb export` and `pmb sync` use
-#
-# 15432 rather than 5432 on purpose: the laptop may run its own Postgres on 5432, and a forward
-# onto an occupied port fails in a way that reads as a database problem.
+#   25432 > Postgres on the VM; set PMB_DB_HOST=host.docker.internal and PMB_DB_PORT=25432
+#   25432, not 15432: the laptop stack publishes its own Postgres there
 param(
     [string]$Vm      = $env:PMB_VM,
     [string]$Zone    = $env:PMB_ZONE,
@@ -19,18 +16,16 @@ if (-not $Vm -or -not $Zone) {
 
 $projectArg = if ($Project) { @("--project", $Project) } else { @() }
 
-# ExitOnForwardFailure is the important one. Without it a failed forward leaves a live SSH
-# session and a dead port, which looks like the brain being broken rather than the tunnel.
+# ExitOnForwardFailure: a failed forward otherwise leaves a live session and a dead port
 $sshArgs = @(
     "-N",
     "-o", "ServerAliveInterval=30",
     "-o", "ServerAliveCountMax=3",
     "-o", "ExitOnForwardFailure=yes",
-    "-L", "8000:127.0.0.1:8000",
-    "-L", "15432:127.0.0.1:5432"
+    "-L", "25432:127.0.0.1:5432"
 )
 
-Write-Output "tunnel to $Vm ($Zone): 8000 -> MCP, 15432 -> postgres. Ctrl+C to stop."
+Write-Output "tunnel to $Vm ($Zone): 25432 > postgres. Ctrl+C to stop."
 
 while ($true) {
     gcloud compute ssh $Vm --tunnel-through-iap --zone $Zone @projectArg -- @sshArgs

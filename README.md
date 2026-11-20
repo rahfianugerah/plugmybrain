@@ -1,451 +1,310 @@
 # PlugMyBrain
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
-![Conda](https://img.shields.io/badge/Conda-Miniconda-44A833?logo=anaconda&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-2.0-000000?logo=modelcontextprotocol&logoColor=white)
 ![Cognee](https://img.shields.io/badge/Cognee-1.4.2-0F766E)
 ![Graphify](https://img.shields.io/badge/Graphify-0.9.38-B45309)
-![Status](https://img.shields.io/badge/Status-WIP-D29922)
-![License](https://img.shields.io/badge/License-MIT-750014)
+![Obsidian](https://img.shields.io/badge/Obsidian-Required-7C3AED?logo=obsidian&logoColor=white)
+![Status](https://img.shields.io/badge/Status-Active-2EA043)
 
-A plug-and-play memory for any AI model. Point it at a folder and it produces two things: a
-code map an agent reads instead of grepping the tree, and a knowledge graph over the folder's
-documents. Both are namespaced per project, and both are steered by human-authored markdown in
-an Obsidian vault. It exists because an agent with no memory relearns the same context every
-session, and pays for that in tokens every time.
+A plug-and-play memory for coding agents, served entirely over MCP. Point it at a folder of markdown and that folder becomes a brain the agent searches, plus a code map it reads instead of grepping the tree. **Everything runs from `/pmb-*` slash commands, and there is no chat model anywhere in it**: the agent asking the question already has one.
+
+It exists because an agent with no memory relearns the same context every session and pays for that in tokens every time, and because a memory kept inside one vendor's product is lost the day you switch models.
+
+## Table of Contents
+
+1. [Setup](#setup)
+2. [Usage](#usage)
+3. [How It Works](#how-it-works)
+4. [Why It Holds Up](#why-it-holds-up)
+5. [Embeddings Come From an API or From Ollama](#embeddings-come-from-an-api-or-from-ollama)
+6. [Configuration](#configuration)
+7. [Data](#data)
+8. [Postgres Can Live on a VM](#postgres-can-live-on-a-vm)
+9. [Project Structure](#project-structure)
+10. [Development](#development)
+11. [Known Limitations](#known-limitations)
+12. [License](#license)
 
 ## Setup
 
-Follow this in order. Steps 1 and 2 are done; step 3 onward needs your keys and Docker.
+Five steps, once per machine. After step 3 nothing is typed into a terminal again: every operation is a slash command.
 
-**1. Environment.** Conda, an environment named `env`, Python 3.13.
+**1. Prerequisites.** Docker Desktop, Obsidian, Claude Code or Codex, and any Python from 3.10 for the one-time wiring. For embeddings, either an API key (Voyage by default) or [Ollama](https://ollama.com) installed on this machine.
 
-```bash
-conda env update -f environment.yml
-conda activate env
-pip install -e .
-```
-
-Never use bare `pip` or bare `python` outside the activated environment. On this machine they
-resolve to different interpreters, and an install lands somewhere the code cannot import it.
-
-**2. Code map.** No API key, no network, nothing uploaded.
+**2. Configuration.** Copy the template and fill it in by hand.
 
 ```bash
-pmb map /path/to/any-project
-```
-
-**3. Configuration.** Copy the template and fill it in by hand.
-
-```bash
+git clone https://github.com/rahfianugerah/plugmybrain.git
+cd plugmybrain
 cp .env.example .env
 ```
 
-Two keys are required and they are from different vendors: `EMBEDDING_API_KEY` from Voyage,
-and `LLM_API_KEY` from whichever chat provider you uncomment. Also set `DB_PASSWORD`.
+Three things to set: `PMB_WORKSPACE`, `DB_PASSWORD`, and one of the two embedding blocks, an API or Ollama. Names and their meaning are in [Configuration](#configuration).
 
-**4. Database.** PostgreSQL 18 with pgvector. Relational, vector and graph in one container.
+**`PMB_WORKSPACE` must contain every folder you want remembered.** The server mounts it read-only and can see nothing else. A folder outside it is refused with `is outside PMB_WORKSPACE`, so point it at the parent of all your projects, such as `C:/Users/you`.
+
+**3. Start it from the agent.** Open Claude Code in this checkout and type:
+
+```text
+/pmb-setup
+```
+
+The agent checks that `.env` exists without opening it, pulls the Ollama model if you chose one, builds and starts the stack, registers the server with Claude Code and Codex, and installs the `/pmb-*` commands. The same thing without Claude Code is two commands:
 
 ```bash
-docker compose up -d
-docker compose ps          # wait for healthy
+docker compose up -d --build
+python -m plugmybrain.bootstrap
 ```
 
-**Step 3 has to come first.** `compose.yaml` declares `.env` as a required env file, so
-`docker compose up` without it fails with `env file ... not found`. That is deliberate: made
-optional, `cognee-mcp` would start on cognee's embedded SQLite and LanceDB defaults and quietly
-serve the wrong database.
+**Run compose from this checkout, and never name the file with `-f`.** Compose only reads `compose.override.yaml` when it finds the file itself, so `-f compose.yaml` drops the override and recreates Postgres on port 5432, which a development machine usually already owns.
 
-On the laptop `compose.override.yaml` is picked up automatically. It only moves Postgres to
-port 15432, because a development machine usually already owns 5432. The full stack runs
-either way, so a local `docker compose up -d` gives a working brain with no VM and no tunnel.
+**`.env` has to exist first.** Without it `docker compose up` stops with `env file ... not found`, and without `PMB_WORKSPACE` with `set PMB_WORKSPACE in .env`. That is deliberate: a server started on defaults would quietly serve the wrong database or no folders at all.
 
-The `vector` extension is created on first start by `scripts/init-pgvector.sql`. It runs only
-on an empty data directory, so if you ever change it, `docker compose down -v` first.
+**4. Restart Claude Code and Codex.** Both load servers and commands only at start.
 
-**5. Estimate before you spend.** `add` is free; `cognify` calls the model once per chunk.
+**5. Give each folder a role, and digest it.** In the agent, from inside the folder:
 
-```bash
-pmb sync --dry-run
+```text
+/pmb-init brain
+/pmb-digest
 ```
 
-**6. Ingest the curated rules and memory.**
-
-```bash
-pmb sync                                     # laptop, against whatever DB_HOST points at
-docker compose run --rm cognee-ingest          # on the VM, one-shot
-```
-
-Read the output. It reports documents ingested, files skipped by the exclusion list, and which
-vector index each table got with the row count that decided it. A skip is printed rather than
-swallowed, because a silent skip reads as "covered everything" when it did not.
-
-**7. Validate.**
-
-```bash
-pmb eval
-```
-
-Ten questions against the vault's own rules, two of them multi-hop, scored on whether the
-right source file is cited. It also reports p50 and p95 on the warm path.
-
-**8. Look at it.** Three views, none of which needs a server running.
-
-```bash
-pmb visualize --project curated   # the knowledge graph, one self-contained HTML file
-pmb export    --project curated   # the same graph as vault notes, for the Obsidian graph view
-pmb serve                         # optional HTTP API on http://127.0.0.1:8080/health
-```
-
-See `## Visualisation` below for what each one is good for.
-
-**9. Wire the agents.** See `## Agent Wiring`.
-
-### The whole thing, once it is set up
-
-Day to day this is the entire loop:
-
-```bash
-docker compose up -d              # the brain comes up and stays up
-pmb sync                          # after editing anything in the vault's memory/ or rules/
-pmb map /path/to/a/project        # after a codebase changes
-```
-
-Everything else is a query, and the agents make those themselves over MCP.
-
-## Deployment
-
-One `docker compose` stack, identical on the laptop and on a single always-on Compute Engine
-VM. No Cloud Run, no Cloud SQL, no Secret Manager. See `## Deviations From the Standards`.
-
-| Runs on the VM | Runs on the laptop |
-| :- | :- |
-| `postgres`, always on, loopback only | `pmb map`, entirely local, no network at all |
-| `cognee-mcp`, always on, loopback only | The Obsidian vault, which you edit |
-| `cognee-ingest`, one-shot, behind a compose profile | Claude Code and Codex, via the tunnel |
-| The nightly `pg_dump` | `pmb export` and `pmb sync`, via the tunnel |
-
-If the tunnel is down, `pmb map` still answers code-structure questions. Only the document
-brain becomes unreachable. That is the intended degradation, not an outage.
-
-### 1. Create the VM
-
-Nothing here is run for you. Substitute your own project and confirm the cost first.
-
-```bash
-export PROJECT=[PROJECT]  ZONE=asia-southeast1-a  VM=plugmybrain
-gcloud compute instances create $VM --project $PROJECT --zone $ZONE \
-  --machine-type e2-small \
-  --image-family debian-12 --image-project debian-cloud \
-  --boot-disk-size 30GB --boot-disk-type pd-balanced
-```
-
-30GB is not generosity. Docker images plus Postgres data plus WAL plus logs on a 10GB disk is
-how a data directory gets corrupted, and disk is the cheapest part of this.
-
-Lock SSH to Identity-Aware Proxy so the tunnel is the only door, and open nothing else:
-
-```bash
-gcloud compute firewall-rules create pmb-iap-ssh --project $PROJECT \
-  --allow tcp:22 --source-ranges 35.235.240.0/20
-```
-
-There is deliberately no rule for 5432 or 8000. Both bind to the VM's loopback and are reached
-only through the tunnel.
-
-### 2. Provision the host
-
-```bash
-gcloud compute ssh $VM --tunnel-through-iap --zone $ZONE
-sudo bash scripts/provision-vm.sh     # swap, disk check, docker at boot, Asia/Jakarta
-```
-
-### 3. Configuration, and bring it up
-
-```bash
-sudo install -m 600 /dev/null /opt/plugmybrain/.env
-sudo vi /opt/plugmybrain/.env               # from .env.example; DB_HOST=postgres inside compose
-sudo docker compose up -d
-```
-
-`.env` is `0600` and root-owned, so the stack runs as root from `/opt/plugmybrain`.
-
-### 4. The tunnel, from the laptop
-
-```powershell
-$env:PMB_VM="plugmybrain"; $env:PMB_ZONE="asia-southeast1-a"; $env:PMB_PROJECT="[PROJECT]"
-.\scripts\tunnel.ps1
-```
-
-One session carries both ports and reconnects if it drops: `8000` for the MCP server and
-`15432` for Postgres. Set `DB_PORT=15432` in the laptop's `.env`. The odd port is deliberate:
-a dev Postgres already holding 5432 would otherwise make the forward fail in a way that reads
-as a database problem.
-
-### 5. Backups
-
-```bash
-gcloud storage buckets create gs://[BUCKET] --project $PROJECT --location asia-southeast1
-gcloud storage buckets add-iam-policy-binding gs://[BUCKET] \
-  --member "serviceAccount:$(gcloud compute instances describe $VM --zone $ZONE \
-    --format 'value(serviceAccounts[0].email)')" --role roles/storage.objectAdmin
-```
-
-Set `BACKUP_BUCKET` in the VM's `.env`, then schedule it:
-
-```bash
-sudo crontab -e
-# 0 3 * * * /opt/plugmybrain/scripts/backup.sh >> /var/log/pmb-backup.log 2>&1
-```
-
-The timezone is set by `provision-vm.sh`. Without it cron runs UTC and 03:00 becomes 10:00
-local. The script exits non-zero on an empty dump or a nearly full disk, because a backup
-script that fails quietly is worse than none: it is trusted.
-
-A disk snapshot schedule is the zero-maintenance complement and covers a different failure:
-
-```bash
-gcloud compute resource-policies create snapshot-schedule pmb-nightly \
-  --project $PROJECT --region asia-southeast1 \
-  --max-retention-days 14 --daily-schedule --start-time 19:00
-```
-
-### 6. Restore
-
-```bash
-gcloud storage cp gs://[BUCKET]/plugmybrain-YYYY-MM-DD.sql.gz .
-gunzip -c plugmybrain-YYYY-MM-DD.sql.gz | docker compose exec -T postgres psql -U plugmybrain -d plugmybrain
-```
-
-**Restore once into a scratch database before you trust it.** An untested backup is not a
-backup. And the real durable store is the markdown vault: worst case, the whole database is
-rebuildable by re-running `pmb sync`.
-
-## Visualisation
-
-Three views, because they answer different questions. All three are files you open, not
-services you run.
-
-| View | Command | Shows | Cost |
-| :- | :- | :- | :- |
-| Code map | `pmb map <path>` | Classes, functions, imports and the call graph, as an interactive `graph.html` | Zero API tokens, entirely local |
-| Knowledge graph | `pmb visualize --project <name>` | The Cognee graph as one self-contained HTML file | One query, no model call |
-| Vault graph | `pmb export --project <name>` | The same graph as `[[wikilink]]` notes, rendered by Obsidian's own graph view | One query, no model call |
-
-```bash
-pmb map C:\path\to\project                        # then open graph/<project>/graphify-out/graph.html
-pmb visualize --project curated                   # then open docs/graph/kg/curated/graph.html
-pmb export    --project curated                   # then open the vault in Obsidian
-```
-
-The vault view is the one to reach for when you want the knowledge graph *next to* the notes
-that produced it, since Obsidian renders generated notes and human ones in one graph. The
-standalone HTML is the one to reach for when you just want to look.
-
-## Keeping What the Graph Found
-
-Everything under `docs/graph/` is gitignored and **regenerated**, so a note you edit there is
-destroyed by the next rebuild. That is the point: generated content is disposable, and the
-memory is not.
-
-When the graph surfaces something worth keeping, promote it:
-
-```bash
-pmb promote docs/graph/kg/curated/some-node.md --type fact
-```
-
-It lands in `docs/memory/<type>/` with the five-key frontmatter, a slugged filename, and a
-`**Why:**` line waiting to be filled in. From that moment it is yours: committed, editable, and
-ingested into the `curated` dataset, which **wins on conflict** with anything a machine
-inferred. Edit it, run `pmb sync`, and every agent reads your version.
-
-That is the whole loop. Cognee proposes, you decide, and the decision becomes the memory.
-
-`promote` is the only code in this project that writes above the generated area. It refuses a
-source outside `docs/graph/`, refuses to escape `docs/memory/`, and refuses to overwrite an
-existing note without `--force`, because that note is human-authored and this program did not
-write it.
-
-## Agent Wiring
-
-Both Claude Code and Codex reach the brain as a remote MCP server at
-`http://127.0.0.1:8000/mcp`. **The same URL works in both setups**, which is the point:
-
-- **Stack running locally.** `docker compose up -d` publishes the MCP server on loopback. No
-  tunnel, no VM, nothing else to start.
-- **Stack running on the VM.** Start the tunnel from `## Deployment` step 4; it forwards `8000`
-  to the VM's loopback, so the URL the agents already have keeps working.
-
-Neither agent runs a cognee process, and neither pays a cold start.
-
-```powershell
-claude mcp add --transport http plugmybrain http://127.0.0.1:8000/mcp --scope user
-```
-
-For Codex, add this to `~/.codex/config.toml` by hand. `codex mcp add` only registers stdio
-servers, so the CLI cannot do this one:
-
-```toml
-[mcp_servers.plugmybrain]
-url = "http://127.0.0.1:8000/mcp"
-startup_timeout_sec = 60
-```
-
-**SSH is the authentication boundary.** The MCP server has no auth of its own and binds only to
-the VM's loopback, so the tunnel is the only way to reach it. Plain HTTP is correct rather than
-lazy: the traffic never leaves loopback on either end and SSH encrypts the hop between them.
-
-`CLAUDE.md` and `AGENTS.md` in this repository are byte-identical and carry the same three
-pointers: read `graph.json` for code structure, read the vault's `memory/` for rules, and pass
-the dataset on every Cognee query. Other projects copy [[agent.template.md]] from the vault
-rather than reinventing them.
+Then open the vault in Obsidian (`PMB_DOCS`, the sibling `docs` checkout by default). The code map sits under `graph/code/<brain>/`, next to the notes a person wrote.
 
 ## Usage
 
-```bash
-pmb map    /path/to/project          # code structure, zero API tokens
-pmb ingest /path/to/project          # that project's documents, into its own dataset
-pmb search "how is auth handled" --project project
-pmb sync                             # re-ingest the curated rules and memory
-pmb export    --project project      # knowledge graph as vault notes
-pmb visualize --project project      # knowledge graph as one HTML file
-pmb promote  <generated-note>        # keep one: move it into the human-authored memory
-pmb eval                             # score and latency
-pmb serve                            # the HTTP API
+Type `/pmb` in the agent and the commands complete. Each one is a markdown prompt that tells the agent which MCP tool to call, so the same commands work in Claude Code and in Codex.
+
+| Command | Does |
+| :- | :- |
+| `/pmb-setup` | Once per machine, from this checkout: starts the stack, wires both agents, installs the commands |
+| `/pmb-init root\|brain [folder]` | Writes the folder's one-word `.pmb` role, and scaffolds `memory/` for a brain |
+| `/pmb-digest [folder]` | Chunks and embeds the folder's markdown into the memory named after it, and maps its code |
+| `/pmb-status [folder]` | Markdown on disk against what was digested, every memory in the database, the embedding model, and the running job |
+| `/pmb-recall <question>` | Answers only from the memory, with the source file for every claim |
+| `/pmb-code [question]` | Asks the Graphify code map where something lives; with no question, the codebase's hubs |
+| `/pmb-map [brain]` | Switches which memory this session reads from |
+| `/pmb-memory-digest` | Writes what the session learned as one note in `memory/`, then digests it |
+| `/pmb-memory-no-digest` | Writes the note only, for a batch of notes or a review before digesting |
+| `/pmb-reset [folder\|all]` | Deletes a memory from the database after asking you. Never touches a markdown file |
+
+**Asking a question needs no command.** The server's instructions tell the agent to call `recall` before answering anything about a project's rules or history. `/pmb-recall` is for when the memory must be the only source.
+
+The commands are thin. The work is six MCP tools, which any MCP client can call directly:
+
+| Tool | Writes | Does |
+| :- | :- | :- |
+| `recall(query, brain, top_k)` | Nothing | Passages from one brain, or several comma-separated, each with the file it came from |
+| `brains()` | Nothing | Every memory and its document count |
+| `status(folder)` | Nothing | What `/pmb-status` shows |
+| `code_map(brain, question)` | Nothing | Graphify's answer from the folder's code map |
+| `digest(folder, wait_seconds)` | The index and the vault | Starts a digest in the background and returns the report when it ends |
+| `reset(folder, confirm, everything)` | The index and the vault | Deletes a memory; `confirm` must repeat the brain name |
+
+**A long digest is waited on, not timed out.** `digest` returns within 45 seconds, under Codex's default tool timeout. If the job is still running it says so, and calling `digest` again with the same folder keeps waiting on the same job instead of starting another.
+
+## How It Works
+
+```mermaid
+flowchart LR
+  A["Agent: Claude Code or Codex"] -->|"/pmb-* command"| T["MCP tools on 127.0.0.1:9000"]
+  T -->|recall, status| R["Retrieval, scoped per brain"]
+  T -->|digest, reset| J["One background job"]
+  T -->|code_map| G["Graphify query"]
+  J --> C["Cognee pipeline: classify, chunk, embed"]
+  J --> GX["Graphify extract: tree-sitter"]
+  W[("PMB_WORKSPACE, read-only")] --> J
+  C --> P[("Postgres 18 with pgvector")]
+  R --> P
+  GX --> V[("Obsidian vault: graph/code/brain")]
+  E["Embedding: an API or Ollama"] --- C
 ```
 
-The dataset is the folder's own name, and it is required on every read. That is what keeps one
-project's memory out of another's answers. Nothing is ever scanned without an explicit path.
+One Docker stack runs two containers: Postgres, and the MCP server. The server is the only process an agent talks to, and it does everything: it answers searches from Postgres, runs digests as a background subprocess, and queries the code map.
+
+**The folder is the unit, and its name is the memory.** `docs/` becomes the memory `docs`; a `.pmb` file holding `root` makes every child its own memory, rules first. One database holds every memory, and `brain` on each call chooses which one answers.
+
+### What Cognee Does Here
+
+Cognee is the ingestion and retrieval engine. On a digest it reads each markdown file, classifies it, splits it into chunks of about 1,500 characters, embeds every chunk, and stores the text, the vectors and the document links in Postgres, which holds the relational, vector and graph stores at once. On `recall` it embeds the question and returns the nearest chunks.
+
+PlugMyBrain runs three of Cognee's five default pipeline steps. The step it removes, `extract_graph_and_summarize`, is the only one that calls a chat model, and it was the whole bill: structured JSON per chunk, roughly $9 for a 3.6MB corpus. Without it Cognee is a chunker, an embedder and a store, which is all retrieval needs.
+
+Two things Cognee does not do, so PlugMyBrain does them:
+
+- **Scoping a search to one brain.** Cognee keeps every memory in one vector collection and its `datasets` argument does not filter a search. `recall` over-fetches, then keeps only chunks whose document id belongs to the requested brain in Postgres. By id rather than by file name, so two brains that both hold a `README.md` never answer for each other.
+- **The vector index.** Cognee creates vector tables with no index. After every digest PlugMyBrain gives each table the index its row count deserves: exact search below 10,000 rows, where an approximate index is slower, and IVFFlat above it.
+
+### What Graphify Does Here
+
+Graphify builds the code map. On every digest it parses the folder's source with tree-sitter, locally and with no model, into a graph of files, classes, functions, imports and calls, then clusters it into communities and writes a report. The raw `graph.json` stays in this checkout's `graph/<brain>/`, and the report is copied into the vault so Obsidian shows it beside the notes.
+
+`code_map` queries that graph. A question returns the code that answers it and how it connects; no question returns the most connected nodes, the hubs that explain an unfamiliar codebase fastest. An agent reads that instead of walking the tree, so finding where something lives costs no model tokens and no grep output.
+
+**Cognee answers "what do we know about X". Graphify answers "where in the code is X".** Markdown goes to Cognee and source goes to Graphify, so source code is never sent to an embedding API.
+
+### The Markdown Is the Memory
+
+Postgres and the code map are indexes. Delete either and a digest rebuilds it from the files. Nothing writes into Cognee except a digest of a file on disk, so a note an agent wants to keep is written as markdown into the folder's `memory/` by `/pmb-memory-digest`, reviewed like any other file, and committed.
+
+The server mounts `PMB_WORKSPACE` read-only. It cannot change a project even by mistake; its only writes are the database and the vault's `graph/`.
+
+## Why It Holds Up
+
+- **No terminal after setup.** Digest, status, reset, recall and the code map are all MCP tools behind slash commands. Nobody types `docker` again.
+- **Nothing to pay per question.** Retrieval embeds the question and reads Postgres. With Ollama, digesting costs nothing either.
+- **Portable across models.** The memory is markdown in git. Switching agent, embedding model or database costs a reindex, not a migration, and a model that has never seen this project reads the same files.
+- **Sourced answers.** Every passage carries the file it came from, and an empty result says so rather than letting the agent guess.
+- **Small surface, on purpose.** Six tools, four of them read-only. Every tool an agent can see costs context on every turn, which is why Cognee's own MCP server, with eleven tools and three that write into the index behind the markdown's back, was replaced.
+- **Safe by construction.** A read-only workspace, a secret exclusion list applied before anything is embedded, loopback-only ports, a confirmation that must repeat the brain name before a reset, and a refusal to mix two embedding models in one database.
+- **One stack, many memories.** Every project on the machine lives in one database; switching is a word on the next call, not a restart.
+- **Obsidian as the window.** The notes a person wrote and the code maps a digest generated sit in one vault and one graph view.
+
+## Embeddings Come From an API or From Ollama
+
+The embedding model is the only model in PlugMyBrain. Pick one in `.env`:
+
+| | API | Ollama |
+| :- | :- | :- |
+| `EMBEDDING_PROVIDER` | `voyage`, or any LiteLLM embedding provider | `ollama` |
+| `EMBEDDING_MODEL` | `voyage/voyage-3.5` | `bge-m3`, after `ollama pull bge-m3` |
+| `EMBEDDING_DIMENSIONS` | `1024` | `1024` |
+| `EMBEDDING_API_KEY` | Required | Not used |
+| `EMBEDDING_ENDPOINT` | Only for an Atlas-issued Voyage key | `http://host.docker.internal:11434/api/embed`, the default |
+| Text leaves the machine | Yes, every chunk | No |
+| Cost | Per token; the Voyage free tier covers a personal corpus | None |
+
+Ollama runs on the host and the server reaches it through `host.docker.internal`, which compose maps on Linux as well as on Docker Desktop. `bge-m3` is the suggested local model: 1024 dimensions, multilingual, and an 8,192-token context.
+
+**Changing the model means re-embedding everything.** Vectors from two models rank each other wrong without any error, so the server records which model built the database and refuses a digest or a search with another one. To switch, run `/pmb-reset all`, change `.env`, restart the stack, and `/pmb-digest` again.
+
+**Keep `EMBEDDING_DIMENSIONS` at 2000 or below.** pgvector will not index a wider vector, and it does not fail loudly: every search becomes a sequential scan. The server refuses to start above it.
 
 ## Configuration
 
-Every variable the project reads. Names only; see [[env.rules.md]].
+Every variable the project reads. Names only; the values live in `.env`, which is never committed.
 
 | Variable | Required | Description |
 | :- | :- | :- |
-| `PMB_VAULT` | No | Path to the Obsidian vault. Defaults to the sibling `docs` checkout |
-| `PMB_GRAPH_DIR` | No | Where Graphify output lands. Defaults to `graph/` |
-| `DB_HOST` `DB_PORT` `DB_NAME` `DB_USERNAME` | Yes | PostgreSQL connection. `postgres:5432` inside compose, `127.0.0.1:15432` from the laptop over the tunnel |
-| `DB_PASSWORD` | Yes | Database password |
-| `EMBEDDING_PROVIDER` `EMBEDDING_MODEL` | Yes | `voyage` and `voyage/voyage-3.5` |
-| `EMBEDDING_DIMENSIONS` | Yes | `1024`. Above 2000 the process refuses to start |
-| `EMBEDDING_API_KEY` | Yes | Voyage key. Separate from the chat key |
-| `LLM_PROVIDER` `LLM_MODEL` | Yes | The chat model that builds the graph |
-| `LLM_API_KEY` | Yes | Unless `LLM_PROVIDER=mcp-sampling`, which only works inside an MCP session |
+| `PMB_WORKSPACE` | Yes | Absolute path of the folder holding every project to remember. Mounted read-only |
+| `DB_PASSWORD` | Yes | Postgres password |
+| `DB_NAME` `DB_USERNAME` | Yes | Postgres database and user. `plugmybrain` by default |
+| `DB_HOST` `DB_PORT` | No | Postgres as the host sees it, for the development CLI. Compose sets the server's own |
+| `EMBEDDING_PROVIDER` `EMBEDDING_MODEL` | Yes | The embedding model. See [Embeddings](#embeddings-come-from-an-api-or-from-ollama) |
+| `EMBEDDING_DIMENSIONS` | Yes | `1024`. Above 2000 the server refuses to start |
+| `EMBEDDING_API_KEY` | For an API | The embedding provider's key |
+| `EMBEDDING_ENDPOINT` | No | An Atlas-issued Voyage key, or a non-default Ollama address |
+| `EMBEDDING_RATE_LIMIT_*` `EMBEDDING_BATCH_SIZE` | No | Throttling, for the Voyage free tier without a payment method |
+| `PMB_DOCS` | No | The Obsidian vault generated notes go into. Defaults to the sibling `docs` checkout |
+| `MCP_PUBLISH_PORT` | No | Host port for the MCP server. Default `9000` |
+| `DB_PUBLISH_PORT` | No | Host port for Postgres. `15432` on a laptop through `compose.override.yaml` |
+| `PMB_DB_HOST` `PMB_DB_PORT` | No | Postgres somewhere else, such as a VM through the tunnel |
 | `POOL_ARGS` `VECTOR_POOL_ARGS` | No | Connection pool sizing |
-| `CHUNK_SIZE` `CHUNK_OVERLAP` | No | Ingestion chunking |
-| `PMB_INDEX` | No | `auto`, `exact`, `ivfflat` or `hnsw`. Default `auto` |
-| `PMB_INDEX_THRESHOLD` | No | Rows below which exact search beats an index. Default 10000 |
+| `CHUNK_SIZE` `CHUNK_OVERLAP` | No | Characters per chunk, and the overlap |
+| `PMB_INDEX` `PMB_INDEX_THRESHOLD` | No | `auto`, `exact`, `ivfflat` or `hnsw`, and the row count where `auto` switches |
 | `BACKUP_BUCKET` `BACKUP_KEEP_DAYS` | No | VM only. Nightly `pg_dump` target and retention |
-| `PMB_VM` `PMB_ZONE` `PMB_PROJECT` | No | Laptop only. Used by `scripts/tunnel.ps1` |
+| `PMB_VM` `PMB_ZONE` `PMB_PROJECT` | No | Laptop only, for `scripts/tunnel.ps1` |
+
+| Port | Service | Bound to |
+| :- | :- | :- |
+| `9000` | MCP server, streamable HTTP at `/mcp` | `127.0.0.1` |
+| `15432` | Postgres on a laptop, `5432` on a VM | `127.0.0.1` |
 
 ## Data
 
-Nothing here is committed.
-
 | Item | Location | Notes |
 | :- | :- | :- |
-| Code maps | `graph/<project>/graphify-out/` | Gitignored. Produced by `pmb map` |
-| Code reports | `<vault>/graph/code/<project>/` | Gitignored in the vault. Never hand-edited |
-| Graph export | `<vault>/graph/kg/<dataset>/` | Gitignored in the vault. Never hand-edited |
-| The memory itself | `<vault>/memory/` and `<vault>/rules/` | Committed, human-authored, the source of truth |
+| The memory itself | `<folder>/memory/` | Committed in that folder's repository. Human-authored, the source of truth |
+| Folder role | `<folder>/.pmb` | Committed, so a clone on another machine knows the layout |
+| Chunks and vectors | Docker volume `pmb-pgdata` | Rebuilt by a digest |
+| Cognee system state | Docker volume `pmb-cognee` | Rebuilt by a digest |
+| Code map, raw | `graph/<brain>/` in this checkout | Gitignored. Rebuilt by a digest |
+| Code map report | `<vault>/graph/code/<brain>/` | Gitignored in the vault. Rebuilt by a digest, deleted by a reset |
+| `.env` | This checkout | Gitignored. Holds the keys |
+
+## Postgres Can Live on a VM
+
+The default is everything on the laptop. When the database should outlive the laptop, Postgres moves to a small always-on VM and **the server stays on the laptop**, because it has to read the folders it digests.
+
+On the VM, from a checkout with its own `.env` (mode `600`):
+
+```bash
+sudo bash scripts/provision-vm.sh
+sudo docker compose up -d postgres
+```
+
+`provision-vm.sh` adds swap, refuses a disk under 25GB, enables Docker at boot and sets the timezone. Nothing on the VM listens beyond loopback; the only way in is SSH through IAP.
+
+On the laptop, open the tunnel and point the server at it:
+
+```powershell
+$env:PMB_VM="plugmybrain"; $env:PMB_ZONE="asia-southeast1-a"; $env:PMB_PROJECT="your-project"
+.\scripts\tunnel.ps1
+```
+
+Then set `PMB_DB_HOST=host.docker.internal` and `PMB_DB_PORT=25432` in `.env`, and start only the server:
+
+```bash
+docker compose up -d --no-deps mcp
+```
+
+`scripts/backup.sh` runs a nightly `pg_dump` to a GCS bucket from cron on the VM and exits non-zero on an empty dump or a nearly full disk. **Restore once into a scratch database before trusting it.** The markdown remains the real backup: the whole database comes back from a digest.
 
 ## Project Structure
 
 ```text
 plugmybrain/
-  config.py      # paths, the exclusion list, the dimension and index guards
-  ingest.py      # add, cognify, then the vector index cognee does not create
-  retrieve.py    # dataset-scoped search
-  export.py      # knowledge graph to vault wikilink notes, and to one HTML file
-  promote.py     # the only module that writes into the human-authored memory
-  eval.py        # the question set, scored, with p50 and p95
-  api.py         # the HTTP surface
-  cli.py         # the one entry point
-compose.yaml     # postgres, cognee-mcp, and cognee-ingest behind a profile
-scripts/
-  provision-vm.sh   # swap, disk check, docker at boot, timezone
-  tunnel.ps1        # the laptop's SSH forwards to the VM
-  backup.sh         # nightly pg_dump to GCS
-  init-pgvector.sql # CREATE EXTENSION, on first start only
+  server.py      # the MCP server: six tools, and the only thing an agent talks to
+  jobs.py        # one background digest or reset at a time, as a subprocess
+  ingest.py      # Cognee add, chunk and embed, then the vector index
+  retrieve.py    # search scoped to a brain by document id
+  manage.py      # status, reset, and the embedding model guard
+  config.py      # paths, folder roles, workspace mapping, the exclusion list, startup checks
+  cli.py         # what a job runs inside the container: digest, list, reset
+  bootstrap.py   # once per machine: wires Claude Code and Codex, installs the commands
+commands/        # the /pmb-* slash commands, installed into both agents
+.claude/commands/pmb-setup.md   # /pmb-setup, available inside this checkout
+compose.yaml     # postgres and the mcp server
+scripts/         # provision-vm.sh, tunnel.ps1, backup.sh, init-pgvector.sql
 tests/
+docs/PRD.md      # what this is for, and what it deliberately is not
 ```
 
 ## Development
 
+Conda, an environment named `env`, Python 3.13. The image does not need it; it is for tests and the linter.
+
 ```bash
-ruff check .          # lint
-ruff format .         # format
-pytest                # tests
+conda env update -f environment.yml
+conda activate env
+pip install -e .
+ruff check .
+ruff format .
+pytest
 ```
 
-## Privacy
+A change to the server is live after `docker compose up -d --build`. A change to a command in `commands/` is live after `python -m plugmybrain.bootstrap` and an agent restart.
 
-**"Local" describes the database only.** In both profiles every ingested document is sent to
-the cloud model for extraction and embedding. Data leaves the machine either way.
-
-The code map does not: `pmb map` runs tree-sitter locally with `--code-only` and makes no
-network call at all. That is why code structure comes from Graphify and documents from Cognee,
-rather than putting source through the model.
-
-`config.py` refuses to ingest a path matching the exclusion list, whatever folder it is pointed
-at, and prints what it skipped. The ceiling: it matches on names and directories, so a secret
-pasted into an ordinary `.md` still gets through.
+The branches follow a promotion path, `dev` to `staging` to `main`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Known Limitations
 
-- **The graph store is a demo feature.** Postgres-as-graph is released by cognee as a demo; the
-  production version is licensed. It is used here because one database holds relational, vector
-  and graph at once, so the whole local setup is a single `docker compose up`. If it proves
-  unstable, `GRAPH_DATABASE_PROVIDER=kuzu` works locally with no other change.
-- **The embedding model is locked to the corpus.** Swapping the chat model is free. Swapping
-  `EMBEDDING_MODEL` or `EMBEDDING_DIMENSIONS` means re-embedding everything.
-- **1024 dimensions is a ceiling, not a preference.** pgvector will not index a `vector` column
-  wider than 2000, by HNSW or IVFFlat. It does not fail loudly; it just leaves every search
-  doing a sequential scan. `config.py` refuses to start above that.
-- **The first corpus gets no vector index, on purpose.** pgvector sizes IVFFlat at
-  `lists = rows / 1000`, so a few hundred chunks would produce a one-list index: a sequential
-  scan carrying index overhead. Exact search over the same rows is faster and has perfect
-  recall. `pmb sync` prints which index each table got and the row count that decided it.
-- **HNSW is opt-in and wants roughly 4 GiB.** On a 2 GiB VM the index build is the thing that
-  gets OOM-killed. `PMB_INDEX=hnsw` after resizing, not before.
-- **Ingestion and serving must not run at once on 2 GiB.** `cognee-ingest` sits behind a
-  compose profile so `docker compose up -d` cannot start it, and both cognee containers carry
-  a `mem_limit` so Docker kills them before the kernel picks Postgres by size.
-- **One VM is one point of failure.** Accepted for a personal brain. The nightly `pg_dump` is
-  the mitigation, and the markdown vault is the real durable store: the database is rebuildable
-  from files by re-running `pmb sync`.
-- **There is no single no-model mode returning chunks and graph context together.** `chunks`
-  returns sourced context with no completion step, `graph` spends an extra call. A combined
-  retrieval mode would be a second query, and it is not built until the eval asks for it.
-- **`memify` is called by signature introspection.** It is exported by cognee 1.4.2 but its
-  definition could not be pinned from source, so `ingest.py` reads the installed function's
-  parameters instead of assuming them. It is off unless you pass `--memify`.
+- **Only markdown is digested.** PDF, docx and csv are not read. Convert them first.
+- **There is no entity graph.** `recall` matches text within documents. A question answered only by traversing between documents is not answered; Graphify covers that for code, and for prose it is the price of having no chat model.
+- **The server sees only `PMB_WORKSPACE`.** A folder elsewhere is refused. Widening it means editing `.env` and recreating the server, and everything inside it becomes readable by the container.
+- **One job at a time.** A second digest or a reset while one runs is refused with `Busy`. Searches still work during a digest.
+- **The embedding model is locked to the database.** Changing it is a full reset and re-digest; the server refuses to mix two.
+- **A database digested before this guard existed is not protected.** The first digest records whichever model is configured at that moment, so switch models only after `/pmb-reset all`.
+- **The secret filter matches names, not contents.** `.env`, keys and credential files are never read, but a secret pasted into an ordinary `.md` is embedded like any other text, and with an API it leaves the machine.
+- **The first corpus gets no vector index, on purpose.** Below 10,000 chunks exact search is faster than IVFFlat. `/pmb-digest` reports which index each table got and why.
+- **HNSW is opt-in and wants about 4 GiB to build.** On a 2 GiB machine the build is what gets killed. Set `PMB_INDEX=hnsw` only after resizing.
+- **Postgres-as-graph is a Cognee demo feature.** It is used so one database holds every store. If it proves unstable, `GRAPH_DATABASE_PROVIDER=kuzu` works locally with no other change.
+- **`host.docker.internal` reaches loopback ports only on Docker Desktop.** On Linux the remote-Postgres setup needs the tunnel bound to the Docker bridge instead.
 - **No temporal layer.** Nothing here answers "what did I know in March". Git history does.
-
-## Deviations From the Standards
-
-Written down because [[deploy.rules.md]] and [[secret.rules.md]] require a deviation to say why.
-
-1. **Not Cloud Run.** [[deploy.rules.md]] requires every deployed project to ship to Cloud Run
-   via Cloud Build and Artifact Registry. PlugMyBrain runs as one Docker stack on a flat-cost
-   Compute Engine VM instead. That file now carries a named exception for this one project;
-   the reasoning is in `docs/memory/decision/`. In short: an always-on Postgres has no idle
-   state to scale down to, so the managed equivalent bills a monthly floor for something a
-   single small VM already covers. The exception does not generalise.
-2. **No Alembic for the vector index**, where [[database.rules.md]] routes migrations through
-   Alembic. Cognee owns and mutates its own schema, and a second migration tool fighting it
-   breaks on every cognee upgrade. `ensure_vector_index()` is idempotent DDL run at the end of
-   every ingest instead, and it has to run every time because cognee creates a new table per
-   collection.
-3. **No Secret Manager.** Values live in a gitignored `.env` on the laptop and a `0600`
-   root-owned `.env` on the VM. [[secret.rules.md]] ranks Secret Manager first and a gitignored
-   `.env` second, so this takes the second-ranked option. The cost, stated so it is a decision
-   rather than an accident: no rotation history, no per-secret IAM, and a value readable by
-   anything that can read the file.
-4. **The conda environment is named `env`**, where [[codes.rules.md]] says to name it after the
-   project. Chosen deliberately.
 
 ## License
 
-MIT
+To be confirmed.

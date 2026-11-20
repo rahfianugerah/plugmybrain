@@ -1,59 +1,51 @@
-# Paths and cognee settings. One Docker stack runs everywhere, so DB_HOST is the only thing
-# that differs between the laptop and the VM. There is no profile switch.
+# Paths, folder roles, the exclusion list, and the guards that fail a bad setup at start.
 from __future__ import annotations
 
 import fnmatch
 import os
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# Graphify's raw graph.json, kept out of the folder being mapped
+_graph_dir = os.getenv("PMB_GRAPH_DIR", "")
+GRAPH_DIR = (
+    Path(_graph_dir) if Path(_graph_dir).is_absolute() else REPO_ROOT / (_graph_dir or "graph")
+).resolve()
 
-def _repo_relative(name: str, default: Path) -> Path:
-    """Read a path from the environment, resolving a relative value against the repository.
+# The one Obsidian vault every brain generates into; a digested folder is only ever read
+DOCS = (
+    Path(os.environ["PMB_DOCS"]).resolve()
+    if os.getenv("PMB_DOCS")
+    else (REPO_ROOT.parent / "docs").resolve()
+)
 
-    Not against the working directory: `pmb` is run from wherever you happen to be, and a
-    vault that moves with your shell is a vault that silently points at nothing.
-    """
-    value = os.getenv(name)
-    if not value:
-        return default.resolve()
-    path = Path(value)
-    return (path if path.is_absolute() else REPO_ROOT / path).resolve()
+# Where compose mounts PMB_WORKSPACE, read-only
+WORKSPACE = Path(os.getenv("PMB_WORKSPACE_MOUNT", "/workspace"))
 
+GENERATED = "graph"
+GENERATED_SUBDIRS = ("code",)
+HUMAN = "memory"
 
-# The vault is a sibling checkout by default, because that is how the two repos sit on disk.
-VAULT = _repo_relative("PMB_VAULT", REPO_ROOT.parent / "docs")
+# A folder's role, one word in a .pmb file inside it
+MARKER = ".pmb"
+ROLES = ("root", "brain")
 
-# Graphify output lands here, never inside the folder that was mapped.
-GRAPH_DIR = _repo_relative("PMB_GRAPH_DIR", REPO_ROOT / "graph")
-
-# The only part of the vault this project may write to. Everything above it is human-authored.
-VAULT_GENERATED = VAULT / "graph"
-
-# The human control plane: rules and memory. Wins on conflict with any project dataset.
-CURATED_DATASET = "curated"
-CURATED_PATHS = (VAULT / "rules", VAULT / "memory")
-
-# pgvector refuses to build an approximate index on a `vector` column wider than this, for
-# either HNSW or IVFFlat. Exceeding it does not fail loudly, it just leaves every search doing
-# a sequential scan.
+# pgvector builds no HNSW or IVFFlat index wider than this, and does not say so
 MAX_INDEXABLE_DIMENSIONS = 2000
 
-# exact, ivfflat, hnsw, or auto. auto picks exact below the threshold and IVFFlat above it.
-# HNSW is opt-in and wants roughly 4 GiB; on a 2 GiB VM its build is the thing that OOMs.
+# auto, exact, ivfflat or hnsw; HNSW wants about 4 GiB to build
 INDEX_KIND = os.getenv("PMB_INDEX", "auto")
-
-# Below this row count an approximate index is worse than no index: pgvector sizes IVFFlat at
-# lists = rows / 1000, so a small table gets one list, which is a sequential scan plus overhead.
 FLAT_THRESHOLD = int(os.getenv("PMB_INDEX_THRESHOLD", "10000"))
 
-# Documents only. Code structure is Graphify's job, and ingesting source would pay a model to
-# rediscover what `pmb map` already extracted for nothing.
-DOCUMENT_SUFFIXES = frozenset({".md", ".txt", ".rst", ".pdf", ".docx", ".csv"})
+# Embedding providers that run on this machine and need no key
+LOCAL_PROVIDERS = frozenset({"ollama"})
+OLLAMA_ENDPOINT = "http://host.docker.internal:11434/api/embed"
 
-# Never read, whatever folder the tool is pointed at. Ingestion uploads file contents, so this
-# is the last thing standing between an arbitrary target and a leaked key.
+DOCUMENT_SUFFIXES = frozenset({".md"})
+
+# Never read, whatever folder the tool is pointed at
 EXCLUDED_DIRS = frozenset(
     {
         "keys",
@@ -64,7 +56,7 @@ EXCLUDED_DIRS = frozenset(
         "dist",
         "build",
         "__pycache__",
-        "graph",
+        GENERATED,
         "graphify-out",
         ".obsidian",
     }
@@ -80,45 +72,38 @@ EXCLUDED_NAMES = (
     "jwt-secret.txt",
 )
 
+_GIT_BASH_DRIVE = re.compile(r"^/([a-zA-Z])/")
+_WINDOWS_DRIVE = re.compile(r"^[a-zA-Z]:/")
+
 
 def namespace(target: Path) -> str:
-    """The dataset name for a mapped or ingested folder: its directory name, lowercased."""
-    name = target.resolve().name.lower()
+    """The memory name for a folder: its directory name, lowercased."""
+    target = target.resolve()
+    # The mount point erases the workspace's own name, so take it from the host path
+    if target == WORKSPACE.resolve() and os.getenv("PMB_WORKSPACE"):
+        target = Path(_normalise(os.environ["PMB_WORKSPACE"]))
+    name = target.name.lower()
     if not name:
-        raise ValueError(f"cannot derive a namespace from {target}")
+        raise ValueError(f"cannot derive a name from {target}")
     return name
 
 
-def generated_path(*parts: str) -> Path:
-    """A path inside the vault's generated area. Refuses to escape it, so a regeneration
-    can never touch a human-authored note."""
-    path = VAULT_GENERATED.joinpath(*parts).resolve()
-    if not path.is_relative_to(VAULT_GENERATED.resolve()):
-        raise ValueError(f"refusing to write outside {VAULT_GENERATED}: {path}")
-    return path
-
-
-NOTE_TYPES = ("fact", "decision", "session", "reference")
-
-
-def memory_path(note_type: str, filename: str) -> Path:
-    """A path inside the vault's human-authored memory. The only place this project is allowed
-    to write above the generated area, so the guard lives here and `promote.py` is its only
-    caller."""
-    if note_type not in NOTE_TYPES:
-        raise ValueError(f"unknown note type {note_type!r}. Use one of: {', '.join(NOTE_TYPES)}")
-    root = (VAULT / "memory").resolve()
-    path = (root / note_type / filename).resolve()
+def generated_path(kind: str, name: str, *parts: str) -> Path:
+    """A path under the vault's generated area, refusing to escape it into `memory/`."""
+    if kind not in GENERATED_SUBDIRS:
+        raise ValueError(f"unknown generated kind {kind!r}. Use one of: {GENERATED_SUBDIRS}")
+    root = (DOCS / GENERATED / kind).resolve()
+    path = root.joinpath(name, *parts).resolve()
     if not path.is_relative_to(root):
         raise ValueError(f"refusing to write outside {root}: {path}")
     return path
 
 
 def is_excluded(path: Path) -> bool:
-    """True when a path must never be sent to the model.
+    """True when a path must never be sent to the embedding model.
 
-    ponytail: name and directory matching only. A secret pasted into an ordinary .md still
-    gets through; add a content scan here if that ever stops being an acceptable risk.
+    ponytail: name and directory matching only, so a secret pasted into an ordinary .md still
+    gets through. Add a content scan here if that stops being an acceptable risk.
     """
     if any(part in EXCLUDED_DIRS for part in path.parts):
         return True
@@ -126,26 +111,95 @@ def is_excluded(path: Path) -> bool:
 
 
 def collect_documents(root: Path) -> tuple[list[Path], list[Path]]:
-    """Split a folder into the documents that will be ingested and the files that will not.
-
-    The skipped list is returned rather than discarded, because a silent skip reads as
-    "covered everything" when it did not.
-    """
+    """The markdown to digest, and the files refused that a person would want to hear about."""
     root = root.resolve()
     included: list[Path] = []
     skipped: list[Path] = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        if is_excluded(path):
-            skipped.append(path)
-        elif path.suffix.lower() in DOCUMENT_SUFFIXES:
-            included.append(path)
+    for directory, subdirs, files in os.walk(root):
+        # Pruned, never walked: node_modules and .git are most of a repository. keys/ is
+        # walked so what it holds is reported
+        subdirs[:] = sorted(d for d in subdirs if d not in EXCLUDED_DIRS or d == "keys")
+        for name in sorted(files):
+            path = Path(directory) / name
+            document = path.suffix.lower() in DOCUMENT_SUFFIXES
+            if not is_excluded(path):
+                if document:
+                    included.append(path)
+            elif document or any(fnmatch.fnmatch(name, p) for p in EXCLUDED_NAMES):
+                skipped.append(path)
     return included, skipped
 
 
+def role_of(target: Path) -> str | None:
+    """`root`, `brain`, or None for a folder that was never initialised."""
+    marker = target / MARKER
+    if not marker.is_file():
+        return None
+    value = marker.read_text(encoding="utf-8").strip().lower()
+    return value if value in ROLES else None
+
+
+def children(root: Path) -> list[Path]:
+    """The folders a root digests, brains first, because everything else is read against them."""
+    found = [
+        path
+        for path in sorted(root.iterdir())
+        if path.is_dir()
+        and not path.name.startswith(".")
+        and path.name not in EXCLUDED_DIRS
+        and collect_documents(path)[0]
+    ]
+    return sorted(found, key=lambda path: role_of(path) != "brain")
+
+
+def _normalise(path: str) -> str:
+    """Forward slashes, no trailing slash, and Git Bash `/c/x` as `c:/x`."""
+    path = path.strip().replace("\\", "/")
+    path = _GIT_BASH_DRIVE.sub(lambda match: f"{match[1]}:/", path, count=1)
+    return path.rstrip("/") if len(path) > 1 else path
+
+
+def _under(path: str, root: str) -> bool:
+    # Windows paths compare case-insensitively
+    if _WINDOWS_DRIVE.match(root + "/"):
+        path, root = path.lower(), root.lower()
+    return path == root or path.startswith(root + "/")
+
+
+def resolve_folder(path: str, host_root: str | None = None, mount: Path | None = None) -> Path:
+    """Map a folder as the agent names it on the host to where the server sees it.
+
+    Takes an absolute host path in Windows, Git Bash or POSIX form, a path relative to the
+    workspace, or a path already under the mount.
+    """
+    host_root = os.getenv("PMB_WORKSPACE", "") if host_root is None else host_root
+    mount = WORKSPACE if mount is None else mount
+    given, root, inside = _normalise(path), _normalise(host_root), mount.as_posix()
+    if not given:
+        raise ValueError("name a folder: its path on this machine, or its path in the workspace")
+
+    if given == inside or given.startswith(inside + "/"):
+        relative = given[len(inside) :]
+    elif root and _under(given, root):
+        relative = given[len(root) :]
+    elif given.startswith("/") or _WINDOWS_DRIVE.match(given + "/"):
+        raise ValueError(
+            f"{path} is outside PMB_WORKSPACE ({host_root or 'not set'}), the only folder the "
+            "server can read. Move the folder under it, or widen PMB_WORKSPACE and restart."
+        )
+    else:
+        relative = given
+
+    resolved = (mount / relative.lstrip("/")).resolve()
+    if not resolved.is_relative_to(mount.resolve()):
+        raise ValueError(f"refusing {path}: it leaves the workspace")
+    if not resolved.is_dir():
+        raise ValueError(f"not a folder in the workspace: {path}")
+    return resolved
+
+
 def db_connect_kwargs() -> dict[str, object]:
-    """asyncpg connection arguments for the active profile."""
+    """asyncpg connection arguments."""
     return {
         "host": os.environ["DB_HOST"],
         "port": int(os.environ.get("DB_PORT", "5432")),
@@ -155,66 +209,69 @@ def db_connect_kwargs() -> dict[str, object]:
     }
 
 
-def configure() -> None:
-    """Load `.env`, derive the profile's settings, and fail fast on a bad one.
+def embedding_signature() -> str:
+    """Which model built the vectors. Two models in one database rank each other wrong."""
+    return ":".join(
+        os.environ.get(key, "")
+        for key in ("EMBEDDING_PROVIDER", "EMBEDDING_MODEL", "EMBEDDING_DIMENSIONS")
+    )
 
-    Must run before `import cognee`, because cognee reads its configuration from the
-    environment at import time.
+
+def configure() -> None:
+    """Load `.env`, set the invariants, and fail fast on a bad setup.
+
+    Must run before `import cognee`, which reads its settings from the environment at import.
     """
     from dotenv import load_dotenv
 
     load_dotenv(REPO_ROOT / ".env")
 
-    # Invariants of this design rather than user choices, so they are set, not read.
     os.environ.setdefault("DB_PROVIDER", "postgres")
     os.environ.setdefault("VECTOR_DB_PROVIDER", "pgvector")
     os.environ.setdefault("GRAPH_DATABASE_PROVIDER", "postgres")
     os.environ.setdefault("TELEMETRY_DISABLED", "1")
+    # One person's brain: cognee's per-user databases make `add` fail on a dead connection
+    os.environ.setdefault("REQUIRE_AUTHENTICATION", "false")
+    os.environ.setdefault("ENABLE_BACKEND_ACCESS_CONTROL", "false")
+    # cognee's 30s pre-flight check times out against providers that answer in milliseconds
+    os.environ.setdefault("COGNEE_SKIP_CONNECTION_TEST", "true")
 
-    # A wrong PMB_VAULT is silent otherwise: ingestion finds no documents and reports an empty
-    # corpus, which reads as "the vault is empty" rather than "the path is wrong".
-    if not (VAULT / "memory").is_dir():
-        raise SystemExit(
-            f"no vault at {VAULT} (expected a memory/ folder inside it).\n"
-            "Leave PMB_VAULT blank for the default, or set it relative to this repository, "
-            "for example ../docs."
-        )
-
-    missing = [
-        key for key in ("DB_HOST", "DB_NAME", "DB_USERNAME", "DB_PASSWORD") if not os.getenv(key)
-    ]
+    required = (
+        "DB_HOST",
+        "DB_NAME",
+        "DB_USERNAME",
+        "DB_PASSWORD",
+        "EMBEDDING_PROVIDER",
+        "EMBEDDING_MODEL",
+    )
+    missing = [key for key in required if not os.getenv(key)]
     if missing:
         raise SystemExit(
             f"missing in .env: {', '.join(missing)}. Copy .env.example and fill it in."
         )
 
-    # Voyage is embeddings only, so the embedding key is separate from the chat key. Without
-    # this check cognee silently falls back to LLM_API_KEY and Voyage rejects it with a 401
-    # that names the wrong vendor.
-    if not os.getenv("EMBEDDING_API_KEY"):
+    provider = os.environ["EMBEDDING_PROVIDER"].lower()
+    if provider in LOCAL_PROVIDERS:
+        if not os.getenv("EMBEDDING_ENDPOINT"):
+            os.environ["EMBEDDING_ENDPOINT"] = OLLAMA_ENDPOINT
+    elif not os.getenv("EMBEDDING_API_KEY"):
         raise SystemExit(
-            "EMBEDDING_API_KEY is not set. Voyage needs its own key, separate from LLM_API_KEY."
+            f"EMBEDDING_API_KEY is not set, and {provider} is an API. Set it, or use "
+            "EMBEDDING_PROVIDER=ollama to embed on this machine."
         )
 
-    # mcp-sampling borrows the MCP host's model and needs no key. Any other provider does.
-    if os.getenv("LLM_PROVIDER") != "mcp-sampling" and not os.getenv("LLM_API_KEY"):
-        raise SystemExit(
-            "LLM_API_KEY is not set. Batch ingestion has no MCP host to sample from, "
-            "so it needs a real chat key even when the interactive path does not."
-        )
-
-    dimensions = int(os.environ.setdefault("EMBEDDING_DIMENSIONS", "1024"))
+    dimensions = int(os.getenv("EMBEDDING_DIMENSIONS") or "1024")
+    os.environ["EMBEDDING_DIMENSIONS"] = str(dimensions)
     if dimensions > MAX_INDEXABLE_DIMENSIONS:
         raise SystemExit(
             f"EMBEDDING_DIMENSIONS={dimensions} exceeds {MAX_INDEXABLE_DIMENSIONS}, the widest "
-            "vector pgvector will index at all. Every search would fall back to a sequential "
-            "scan. Use 1024."
+            "vector pgvector will index. Every search would be a sequential scan. Use 1024."
         )
 
     if INDEX_KIND not in ("auto", "exact", "ivfflat", "hnsw"):
         raise SystemExit(f"PMB_INDEX={INDEX_KIND!r}. Use auto, exact, ivfflat or hnsw.")
 
-    # The vector store is the same Postgres as the relational store: one database, one backup.
+    # The vector store is the same Postgres: one database, one backup
     for key in ("HOST", "PORT", "NAME", "USERNAME", "PASSWORD"):
         value = os.getenv(f"DB_{key}")
         if value:

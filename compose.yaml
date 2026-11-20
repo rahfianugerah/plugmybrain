@@ -1,16 +1,14 @@
-# The whole system: one stack, identical on the laptop and on the VM.
-# Tuned for e2-small (2 GiB). Nothing binds anything but loopback; the only way in is the tunnel.
+# The whole system: Postgres, and the MCP server that digests, searches and maps.
+# Nothing binds anything but loopback.
 services:
   postgres:
     image: pgvector/pgvector:0.8.6-pg18
-    container_name: pmb-pg
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${DB_NAME:-plugmybrain}
       POSTGRES_USER: ${DB_USERNAME:-plugmybrain}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
-    # Tuned for 2 GiB with a swapfile behind it. Passed as flags so there is no config file to
-    # mount, drift, or forget. Raise these together with the VM, not on their own.
+    # Sized for 2 GiB; raise together with the machine, not on their own
     command:
       - postgres
       - -c
@@ -24,18 +22,12 @@ services:
       - -c
       - max_connections=20
     ports:
-      # Loopback only. Reached from the laptop through the SSH tunnel, never over the network.
-      # The host port is a variable because a machine that already runs Postgres owns 5432, and
-      # the failure is an opaque socket-permission error rather than "port in use".
+      # A variable, because a machine already running Postgres owns 5432
       - "127.0.0.1:${DB_PUBLISH_PORT:-5432}:5432"
     volumes:
-      # /var/lib/postgresql, NOT /var/lib/postgresql/data. From 18 the official images store
-      # data in a major-version subdirectory so pg_upgrade --link works across a single mount.
-      # Mounting the old path makes the container refuse to start, with a message about
-      # pg_ctlcluster that reads like a corrupted volume rather than a wrong mount point.
+      # /var/lib/postgresql, not .../data: from 18 the image stores data per major version
       - pmb-pgdata:/var/lib/postgresql
-      # Runs once, on an empty data directory. pgvector ships in the image but the extension
-      # still has to be created inside the target database.
+      # Runs once on an empty data directory
       - ./scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/10-pgvector.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-plugmybrain} -d ${DB_NAME:-plugmybrain}"]
@@ -43,67 +35,45 @@ services:
       timeout: 5s
       retries: 10
 
-  cognee-mcp:
+  mcp:
     build: .
-    container_name: pmb-mcp
     restart: unless-stopped
-    # Host, port and path are CLI flags on this binary, confirmed with --help. Passing them as
-    # env vars looked right and was silently ignored. 0.0.0.0 inside the container is correct:
-    # the publish below scopes it to the VM's loopback, so the tunnel is still the only way in.
-    command:
-      ["cognee-mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8000",
-       "--path", "/mcp"]
+    command: ["python", "-m", "plugmybrain.server"]
     env_file: .env
     environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      # cognee-mcp 0.5.5 ships src/__init__.py doing `from server import main`, a bare
-      # top-level import of a module that lives inside its own package. It only resolves with
-      # src/ on sys.path. Scoped to this service so it cannot shadow anything in pmb.
-      PYTHONPATH: /usr/local/lib/python3.13/site-packages/src
-      # Without these cognee writes its system state into site-packages, which a container
-      # restart throws away. Postgres holds the real data; this is the rest.
+      # Another host only when Postgres runs elsewhere, such as through the tunnel
+      DB_HOST: ${PMB_DB_HOST:-postgres}
+      DB_PORT: ${PMB_DB_PORT:-5432}
+      # cognee's own state, which must outlive a restart
       DATA_ROOT_DIRECTORY: /data/cognee
       SYSTEM_ROOT_DIRECTORY: /data/cognee-system
-      # cognee 1.x defaults to authentication required and multi-tenant on. This is one
-      # person's brain behind an SSH tunnel, so both are off: the tunnel is the boundary.
       REQUIRE_AUTHENTICATION: "false"
       ENABLE_BACKEND_ACCESS_CONTROL: "false"
-    # Docker kills this before the kernel picks a victim by size, which would be Postgres.
-    mem_limit: 900m
+      PMB_DOCS: /docs
+      PMB_GRAPH_DIR: /app/graph
+      # The host path, to map an agent's folder onto the mount below
+      PMB_WORKSPACE: ${PMB_WORKSPACE}
+      PMB_WORKSPACE_MOUNT: /workspace
+    # Ollama on the host, on Linux as well as Docker Desktop
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # The server plus one digest; Docker stops it before the kernel picks Postgres
+    mem_limit: 1500m
     ports:
-      - "127.0.0.1:8000:8000"
+      # 9000, because 8000 is every dev server's default
+      - "127.0.0.1:${MCP_PUBLISH_PORT:-9000}:8000"
     volumes:
       - pmb-cognee:/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  cognee-ingest:
-    build: .
-    # Behind a profile, so `docker compose up -d` is structurally incapable of starting it
-    # alongside serving. On 2 GiB that is the difference between slow and OOM-killed, and a
-    # file that enforces it beats remembering to.
-    profiles: ["ingest"]
-    command: ["pmb", "sync"]
-    env_file: .env
-    environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DATA_ROOT_DIRECTORY: /data/cognee
-      SYSTEM_ROOT_DIRECTORY: /data/cognee-system
-      REQUIRE_AUTHENTICATION: "false"
-      ENABLE_BACKEND_ACCESS_CONTROL: "false"
-    mem_limit: 1200m
-    volumes:
-      - pmb-cognee:/data
-      # The vault, read-only: ingestion reads the curated rules and must never write to them.
-      - ${PMB_VAULT:-../docs}:/vault:ro
+      # Every project the server may digest, read-only: it never writes into one
+      - ${PMB_WORKSPACE:?set PMB_WORKSPACE in .env}:/workspace:ro
+      # The Obsidian vault, the one place generated notes are written
+      - ${PMB_DOCS:-../docs}:/docs
+      # Graphify's graph.json, readable from the host as well
+      - ./graph:/app/graph
     depends_on:
       postgres:
         condition: service_healthy
 
 volumes:
   pmb-pgdata:
-  # Cognee's own system state. Small, but it must outlive a container restart.
   pmb-cognee:

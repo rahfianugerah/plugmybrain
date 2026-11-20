@@ -11,4 +11,4 @@ services:
       # 15432, because a development machine usually already runs Postgres on 5432. This also
       # matches DB_PORT in .env.example, which is 15432 for the laptop either way: local
       # container now, forwarded from the VM later.
-      - "127.0.0.1:15432:5432"
+      - "127.0.0.1:${DB_PUBLISH_PORT:-15432}:5432"
